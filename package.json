@@ -1,0 +1,28 @@
+{
+  "name": "c3cli",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "c3cli": "./bin/c3cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "c3cli": "tsx src/cli.ts",
+    "spike": "tsx"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "commander": "^15.0.0",
+    "playwright": "^1.63.0",
+    "yauzl": "^3.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "@types/yauzl": "^3.4.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
