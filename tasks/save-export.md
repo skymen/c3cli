@@ -1,7 +1,27 @@
 # Save / export
 
 **Status:** `c3cli save` implemented for same-format save-back (2026-09-23): folder → folder,
-`.c3p` → `.c3p`. Converting between formats and Export are not started.
+`.c3p` → `.c3p`. `c3cli export` implemented for Web (HTML5) (2026-09-23). Other platforms
+and format conversion are not started.
+
+## Web export (2026-09-23, r495-2)
+- Menu → Project → Export (`title="Export the project for publishing to a platform."`) →
+  `#exportSelectPlatformDialog`: platform tiles are `ui-iconviewitem`s with no id or data
+  attributes, so "Web (HTML5)" is picked by its English label → `.nextButton`.
+- `#exportStandardOptionsDialog`: `#exportTo` (`zip`|`folder`), `#exportMinifyMode`
+  (`none`|`bundle`|`simple`|`advanced`|`debug-advanced`), `#exportLosslessImageFormat`
+  (`png`|`webp`), `#exportLossyImageFormat` (`jpeg`|`webp`|`avif`), checkboxes
+  `#exportDeduplicateImages`, `#exportOptimizeImages`, `#exportOfflineSupport`. c3cli always
+  exports a zip and unzips it itself for folder output, and only changes options that were
+  passed.
+- `#webExportReportDialog` → `a.downloadExportedProject` (a blob URL with `download=`) →
+  Playwright `download` event → `saveAs`. untitled exports in <3 s, 24 files, 1.6 MB.
+- **Free edition** (`#freeEditionLimitDialog`) appears (a) after choosing the platform when
+  the project is over the event cap (sokoban-gen, ~98 events), and (b) after the options
+  step when a paid-only option is chosen: every minify mode except `none`. Both →
+  `refused-by-edition`, exit 2.
+- Checked that the export runs: test-gizmos exported to a folder, served over localhost and
+  loaded headless; the runtime starts and the project's scripts log.
 
 ## How it works (2026-09-23)
 Projects are opened from an OPFS copy through the shimmed pickers (open-project.md), so the
@@ -18,6 +38,13 @@ What an r495-2 save typically changes on older projects (untitled, saved r432.2)
 plus new files `.gitignore`, `llm-context.md`, `models3d.uistate.json`,
 `layouts/uistate/*.instancesBar.json`. c3merge's fidelity test will need to know which of
 these are canonicalisation and which are semantic.
+
+Answers from skymen (2026-09-23):
+- `zAxisScale: normalized → regular` is a known migration. C3 deprecated normalized z when
+  it moved towards 3D, so an old project saved in a new release gets it.
+- Files the editor adds on save (`.gitignore`, `llm-context.md`, …) are **not** ignored by
+  the diff; they're part of what the editor produces.
+- The free-edition event cap only matters for **export**, not open/save/preview.
 
 ## Original notes
 

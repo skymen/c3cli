@@ -2,3 +2,5 @@ node_modules/
 dist/
 fixtures/
 reports/*.raw.*
+.env
+.env.*

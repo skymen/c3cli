@@ -3,12 +3,15 @@
 import { Command, Option } from "commander";
 import { createInterface } from "node:readline/promises";
 import { randomUUID } from "node:crypto";
-import { access, mkdtemp, readdir, rename, rm } from "node:fs/promises";
+import { access, copyFile, mkdir, mkdtemp, readdir, rename, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { diffProjects, type SaveDiff } from "./diff.ts";
-import { DEFAULT_PROFILE, clickOpen, exportStaged, launch, loadEditor, runPreview, saveInEditor, stageProject, type PreviewResult } from "./editor.ts";
+import { LOSSLESS_FORMATS, LOSSY_FORMATS, MINIFY_MODES, exportWeb, type ExportOptions, type ExportResult } from "./export.ts";
+import { unzipProject } from "./unzip.ts";
+import { ReleaseNotFound, clickOpen, exportStaged, launch, loadEditor, runPreview, saveInEditor, stageProject, type PreviewResult } from "./editor.ts";
 import { collect, parseMissingAddons, waitForOutcome, type Outcome } from "./observe.ts";
+import { isLoggedIn, logIn, waitForAccount } from "./login.ts";
 import { readProjectInfo } from "./project.ts";
 import { exactRelease, releaseName, resolveBranch, type Branch, type Release } from "./release.ts";
 
@@ -23,7 +26,7 @@ interface OpenOpts {
   report?: "json";
   timeout: number;
   headed: boolean;
-  profile: string;
+  profile?: string;
   keepOpen: boolean;
   installBundledAddons: boolean;
 }
@@ -40,7 +43,7 @@ function withOpenOptions(cmd: Command): Command {
   .addOption(new Option("--report <format>", "machine-readable report on stdout").choices(["json"]))
   .option("--timeout <seconds>", "give up after this long", (v) => Number(v), 60)
   .option("--headed", "show the browser window", false)
-  .option("--profile <dir>", "browser profile directory", DEFAULT_PROFILE)
+  .option("--profile <dir>", "use (and keep) this browser profile; default: a fresh temporary profile per run")
   .option("--no-install-bundled-addons", "decline the editor's prompt to install addons bundled in the project")
   .option("--keep-open", "leave the editor open until the window is closed (implies --headed)", false);
 }
@@ -63,16 +66,120 @@ withOpenOptions(program.command("preview").description("Open a project, preview 
   .option("--seconds <n>", "how long to let the preview run", (v) => Number(v), 10)
   .action((projectPath: string, opts: OpenOpts & { seconds: number }) => guarded(opts, () => runCommand(projectPath, opts, { kind: "preview", seconds: opts.seconds })));
 
+withOpenOptions(program.command("export").description("Open a project and export it for the web (HTML5), as a zip or unzipped into a folder"))
+  .requiredOption("--to <path>", "a new .zip file, or a new/empty folder to unzip the export into (never overwritten)")
+  .addOption(new Option("--minify <mode>", "script minify mode").choices(MINIFY_MODES))
+  .addOption(new Option("--lossless <format>", "lossless image format").choices(LOSSLESS_FORMATS))
+  .addOption(new Option("--lossy <format>", "lossy image format").choices(LOSSY_FORMATS))
+  .option("--offline", "turn offline support on")
+  .option("--no-offline", "turn offline support off")
+  .action((projectPath: string, opts: OpenOpts & ExportOptions & { to: string }) => guarded(opts, () => runCommand(projectPath, opts, {
+    kind: "export", to: opts.to, options: { minify: opts.minify, lossless: opts.lossless, lossy: opts.lossy, offline: opts.offline },
+  })));
+
 withOpenOptions(program.command("save").description("Open a project, save it with the editor, write the result to --to and diff it against the input"))
   .requiredOption("--to <path>", "where to write the saved project: a new folder for folder projects, a new .c3p for .c3p projects (never overwritten)")
   .action((projectPath: string, opts: OpenOpts & { to: string }) => guarded(opts, () => runCommand(projectPath, opts, { kind: "save", to: opts.to })));
 
-type Then = { kind: "save"; to: string } | { kind: "preview"; seconds: number };
+type Then = { kind: "save"; to: string } | { kind: "preview"; seconds: number } | { kind: "export"; to: string; options: ExportOptions };
+
+interface AccountOpts { profile: string; branch: Branch; release?: string; timeout: number; headed: boolean; report?: "json" }
+
+function withAccountOptions(cmd: Command): Command {
+  return cmd
+    .requiredOption("--profile <dir>", "browser profile that keeps the session")
+    .addOption(new Option("--branch <branch>", "editor branch").choices(["stable", "beta", "lts"]).default("stable"))
+    .option("--release <rNNN>", "exact editor release (overrides --branch)")
+    .addOption(new Option("--report <format>", "machine-readable report on stdout").choices(["json"]))
+    .option("--timeout <seconds>", "give up after this long", (v) => Number(v), 60)
+    .option("--headed", "show the browser window", false);
+}
+
+withAccountOptions(program.command("login").description("Log in with username/email + password (no OAuth) and keep the session in --profile. Reads C3CLI_USERNAME / C3CLI_PASSWORD, or asks (password hidden)"))
+  .action((opts: AccountOpts) => guarded(opts as OpenOpts, () => loginCommand(opts)));
+
+withAccountOptions(program.command("whoami").description("Show which account the editor is logged in to with --profile"))
+  .action((opts: AccountOpts) => guarded(opts as OpenOpts, () => whoamiCommand(opts)));
+
+async function loginCommand(opts: AccountOpts): Promise<number> {
+  const username = process.env.C3CLI_USERNAME || (await ask("Construct account username or email: ", false));
+  const password = process.env.C3CLI_PASSWORD || (await ask("Password (hidden): ", true));
+  if (!username || !password) throw new Error("no credentials: set C3CLI_USERNAME and C3CLI_PASSWORD, or run at a terminal to be asked");
+  const release = opts.release ? exactRelease(opts.release) : await resolveBranch(opts.branch);
+  const session = await launch({ profile: opts.profile, headed: opts.headed });
+  try {
+    await loadEditor(session.page, release, opts.timeout * 1000);
+    const r = await logIn(session.page, username, password, opts.timeout * 1000);
+    const report = { version: REPORT_VERSION, release: release.name, profile: path.resolve(opts.profile), ...r };
+    if (opts.report === "json") console.log(JSON.stringify(report, null, 2));
+    else {
+      console.log(`${r.outcome}  ${r.account.name || "?"} (${r.account.edition} edition)`);
+      if (r.dialog) console.log(`  dialog ${r.dialog.id}: ${r.dialog.text}`);
+      if (r.error) console.log(`  error: ${r.error}`);
+    }
+    return r.outcome === "login-failed" ? EXIT.refused : EXIT.clean;
+  } finally {
+    await session.close();
+  }
+}
+
+async function whoamiCommand(opts: AccountOpts): Promise<number> {
+  const release = opts.release ? exactRelease(opts.release) : await resolveBranch(opts.branch);
+  const session = await launch({ profile: opts.profile, headed: opts.headed });
+  try {
+    await loadEditor(session.page, release, opts.timeout * 1000);
+    const account = await waitForAccount(session.page, 15_000);
+    if (opts.report === "json") console.log(JSON.stringify({ version: REPORT_VERSION, loggedIn: isLoggedIn(account), ...account }, null, 2));
+    else console.log(isLoggedIn(account) ? `${account.name} (${account.edition} edition)` : "not logged in (guest, free edition)");
+    return isLoggedIn(account) ? EXIT.clean : EXIT.refused;
+  } finally {
+    await session.close();
+  }
+}
+
+// Ask on stderr so stdout stays clean for --report json.
+async function ask(question: string, hidden: boolean): Promise<string> {
+  if (!process.stdin.isTTY) return "";
+  if (hidden) return askHidden(question);
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  const answer = await rl.question(question);
+  rl.close();
+  return answer.trim();
+}
+
+// Raw-mode read with no echo at all. (readline redraws the prompt together with the typed
+// line, so filtering its output still leaks the text.)
+function askHidden(question: string): Promise<string> {
+  const stdin = process.stdin;
+  process.stderr.write(question);
+  stdin.setRawMode(true);
+  stdin.setEncoding("utf8");
+  stdin.resume();
+  return new Promise((resolve, reject) => {
+    let buf = "";
+    const finish = () => {
+      stdin.off("data", onData);
+      stdin.setRawMode(false);
+      stdin.pause();
+      process.stderr.write("\n");
+    };
+    const onData = (chunk: string) => {
+      for (const ch of chunk) {
+        if (ch === "\r" || ch === "\n") { finish(); return resolve(buf); }
+        if (ch === "\u0003") { finish(); return reject(new Error("cancelled")); }
+        if (ch === "\u007f" || ch === "\b") buf = buf.slice(0, -1);
+        else buf += ch;
+      }
+    };
+    stdin.on("data", onData);
+  });
+}
 
 async function runCommand(projectPath: string, opts: OpenOpts, then?: Then): Promise<number> {
   const saveTo = then?.kind === "save" ? then.to : undefined;
   const project = await readProjectInfo(projectPath);
   if (saveTo) await checkSaveTarget(saveTo, project.kind);
+  if (then?.kind === "export") await checkSaveTarget(then.to, then.to.toLowerCase().endsWith(".zip") ? "zip" : "folder");
   const notes: string[] = [];
   let release = opts.release ? exactRelease(opts.release) : await resolveBranch(opts.branch);
   release = await maybeUseProjectRelease(release, project.savedWithRelease, opts, notes);
@@ -84,7 +191,24 @@ async function runCommand(projectPath: string, opts: OpenOpts, then?: Then): Pro
     const { page } = session;
     const collector = collect(page);
     const timeoutMs = opts.timeout * 1000;
-    const startupDialogs = await loadEditor(page, release, timeoutMs);
+    let startupDialogs: string[];
+    try {
+      startupDialogs = await loadEditor(page, release, timeoutMs);
+    } catch (e) {
+      if (e instanceof ReleaseNotFound) throw e;
+      // The editor never became usable: nothing about the project can be said.
+      const report = {
+        version: REPORT_VERSION, release: release.name, host: "hosted", outcome: "editor-error",
+        error: (e as Error).message.split("\n")[0],
+        startupPageErrors: collector.pageErrors, startupConsoleErrors: collector.consoleErrors, notes,
+      };
+      if (opts.report === "json") console.log(JSON.stringify(report, null, 2));
+      else {
+        console.log(`editor-error  ${release.name}: ${report.error}`);
+        for (const err of collector.pageErrors.slice(0, 5)) console.log(`  ! ${err.split("\n")[0]}`);
+      }
+      return EXIT.crashed;
+    }
     const staged = await stageProject(page, project, randomUUID());
     // Errors before this point come from the editor starting up, not from the project.
     const startup = { pageErrors: collector.pageErrors.splice(0), consoleErrors: collector.consoleErrors.splice(0) };
@@ -121,6 +245,27 @@ async function runCommand(projectPath: string, opts: OpenOpts, then?: Then): Pro
         : { started: false, url: null, seconds: then.seconds, log: [], consoleErrors: [], pageErrors: [], error: `not previewed: project did not open (${outcome})` };
     }
 
+    let exported: (Omit<ExportResult, "zipPath"> & { to: string; files: number | null }) | undefined;
+    if (then?.kind === "export") {
+      const toPath = path.resolve(then.to);
+      if (outcome !== "opened") {
+        exported = { outcome: "export-failed", to: toPath, files: null, suggestedName: null, reportText: null, dialogs: [], error: `not exported: project did not open (${outcome})` };
+      } else {
+        const tmp = await mkdtemp(path.join(os.tmpdir(), "c3cli-export-"));
+        try {
+          const { zipPath, ...res } = await exportWeb(page, then.options, path.join(tmp, "export.zip"), timeoutMs);
+          let files: number | null = null;
+          if (zipPath) {
+            if (toPath.toLowerCase().endsWith(".zip")) await moveFile(zipPath, toPath);
+            else files = await unzipProject(zipPath, toPath);
+          }
+          exported = { ...res, to: toPath, files };
+        } finally {
+          await rm(tmp, { recursive: true, force: true });
+        }
+      }
+    }
+
     const report = {
       version: REPORT_VERSION,
       project: { path: project.path, kind: project.kind, name: project.name, savedWithRelease: project.savedWithRelease && releaseName(project.savedWithRelease) },
@@ -144,12 +289,19 @@ async function runCommand(projectPath: string, opts: OpenOpts, then?: Then): Pro
       pageErrors: collector.pageErrors,
       notes,
       ...(preview ? { preview } : {}),
+      ...(exported ? { export: exported } : {}),
       ...(saveTo ? { save: save ?? { to: path.resolve(saveTo), ok: false, written: [], diff: null, error: `not saved: project did not open (${outcome})` } } : {}),
     };
     if (opts.report === "json") console.log(JSON.stringify(report, null, 2));
     else printHuman(report);
 
     if (opts.keepOpen) await page.waitForEvent("close", { timeout: 0 });
+    if (exported) {
+      if (outcome !== "opened") return exitCode(outcome, true);
+      if (exported.outcome === "refused-by-edition") return EXIT.refused;
+      if (exported.outcome !== "exported") return EXIT.crashed;
+      return exitCode(outcome, result.dialogs.length + collector.pageErrors.length > 0);
+    }
     if (preview) {
       if (outcome !== "opened") return exitCode(outcome, true);
       if (!preview.started) return EXIT.crashed;
@@ -166,8 +318,20 @@ async function runCommand(projectPath: string, opts: OpenOpts, then?: Then): Pro
   }
 }
 
+// Rename into place, creating parent folders; copy when the temp dir is on another volume.
+async function moveFile(from: string, to: string) {
+  await mkdir(path.dirname(path.resolve(to)), { recursive: true });
+  try {
+    await rename(from, to);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "EXDEV") throw e;
+    await copyFile(from, to);
+    await rm(from, { force: true });
+  }
+}
+
 // Never overwrite: folder targets must not exist (or be empty), file targets must not exist.
-async function checkSaveTarget(to: string, kind: "folder" | "file") {
+async function checkSaveTarget(to: string, kind: "folder" | "file" | "zip") {
   if (kind === "file" && !to.toLowerCase().endsWith(".c3p")) throw new Error(`--to must be a .c3p path for a .c3p project: ${to}`);
   const exists = await access(to).then(() => true, () => false);
   if (!exists) return;
@@ -182,7 +346,7 @@ async function writeSaved(page: import("playwright").Page, kind: "folder" | "fil
   try {
     await exportStaged(page, tmp);
     const [file] = await readdir(tmp);
-    await rename(path.join(tmp, file), to);
+    await moveFile(path.join(tmp, file), to);
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
@@ -219,7 +383,7 @@ function exitCode(outcome: Outcome, hadNoise: boolean): number {
   }
 }
 
-function printHuman(r: { startupPageErrors: string[]; preview?: PreviewResult; save?: { to: string; ok: boolean; written: string[]; diff: SaveDiff | null; error?: string }; outcome: string; project: { name: string | null; path: string }; release: string; durationMs: number; dialogs: { id: string; langKey: string | null; title: string; body: string }[]; missingAddons: { type: string; id: string }[]; bundledAddons: { name: string | null; version: string | null; installed: boolean }[]; pageErrors: string[]; consoleErrors: string[]; notes: string[] }) {
+function printHuman(r: { export?: { outcome: string; to: string; files: number | null; reportText: string | null; dialogs: { id: string; text: string }[]; error?: string }; startupPageErrors: string[]; preview?: PreviewResult; save?: { to: string; ok: boolean; written: string[]; diff: SaveDiff | null; error?: string }; outcome: string; project: { name: string | null; path: string }; release: string; durationMs: number; dialogs: { id: string; langKey: string | null; title: string; body: string }[]; missingAddons: { type: string; id: string }[]; bundledAddons: { name: string | null; version: string | null; installed: boolean }[]; pageErrors: string[]; consoleErrors: string[]; notes: string[] }) {
   console.log(`${r.outcome}  ${r.project.name ?? r.project.path}  (${r.release}, ${(r.durationMs / 1000).toFixed(1)}s)`);
   for (const n of r.notes) console.log(`  note: ${n}`);
   if (r.startupPageErrors.length) console.log(`  editor startup: ${r.startupPageErrors.length} page error(s) before the open (not counted), first: ${r.startupPageErrors[0].split("\n")[0]}`);
@@ -233,6 +397,12 @@ function printHuman(r: { startupPageErrors: string[]; preview?: PreviewResult; s
     if (!p.started) console.log(`  preview failed: ${p.error}`);
     else console.log(`  preview ran ${p.seconds}s: ${p.pageErrors.length} uncaught error(s), ${p.consoleErrors.length} console error(s)`);
     for (const e of [...p.pageErrors, ...p.consoleErrors].slice(0, 10)) console.log(`    ! ${e.split("\n")[0].slice(0, 200)}`);
+  }
+  if (r.export) {
+    const x = r.export;
+    if (x.outcome === "exported") console.log(`  exported → ${x.to}${x.files !== null ? ` (${x.files} files)` : ""}`);
+    else console.log(`  export ${x.outcome}${x.error ? `: ${x.error}` : ""}`);
+    for (const d of x.dialogs) console.log(`    dialog ${d.id}: ${d.text.replace(/\s+/g, " ").slice(0, 200)}`);
   }
   if (r.save?.ok && r.save.diff) {
     const d = r.save.diff;

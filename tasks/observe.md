@@ -26,6 +26,9 @@
   the declined addon.
 - `deprecatedFeaturesDialog` shows up *after* a successful open on some older projects;
   that's reported as opened with warnings (exit 1).
+- Editor-startup page errors: if the editor still becomes usable (LTS r449-5's
+  flowchartView error), report them separately and don't fail the run. If the editor never
+  becomes usable, the run fails as `editor-error` (skymen, 2026-09-23).
 - Missing addons are parsed into `{type, name, id, author}` from lines like
   `Effect Foil Effect (dumivid_HolographicFoil) by dumivid`.
 - Console noise on every load: `Failed to load resource: 400`, `No available adapters`

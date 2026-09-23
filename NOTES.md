@@ -14,7 +14,7 @@ limits · `[internal]` calling editor internals, demangling · `[cli]` command s
 ## Now
 
 - [host] Local dev copy (`?mode=dev&project=`) deferred: hosted only for now, see [tasks/editor-hosting.md](tasks/editor-hosting.md)
-- [auth] Log in to lift the guest 25-event cap (free account: 50) before relying on sweep results for bigger projects ([tasks/auth.md](tasks/auth.md))
+- [auth] Test the `c3cli login` success path from a fresh profile with the skymen_auto test account (`.env`, gitignored); skymen rotates the password afterwards ([tasks/auth.md](tasks/auth.md))
 
 ## Normal
 
@@ -29,13 +29,16 @@ limits · `[internal]` calling editor internals, demangling · `[cli]` command s
 
 ## Later
 
-- [save] Export (HTML5 zip, others) via menu automation + download capture ([tasks/save-export.md](tasks/save-export.md#export))
+- [save] Export to other platforms (Cordova, desktop, Arcade…) and `exportTo=folder` via the picker shim ([tasks/save-export.md](tasks/save-export.md))
+
 - [host] Pin a release against the *local* copy (hosted `--release rNNN` / `--branch` already work) ([tasks/editor-hosting.md](tasks/editor-hosting.md))
 - [cli] `c3cli eval <js>` against the editor page for ad-hoc experiments; `c3cli screenshot`
 - [cli] Scripted edits ("open, rename object type X, save") for generating merge fixtures inside the real editor — only if the internal API turns out stable enough
 - [docs] README, and a "how the editor loads a project" write-up from what the lab finds
 
 ## Ideas
+
+- Node library alongside the CLI (`import { openEditor } from "c3cli"`): hand back live handles so callers can drive the preview (evaluate in the runtime, read state, send input), which is more than a one-shot CLI can express (skymen, 2026-09-23)
 
 - Run as a GitHub Action service: `c3cli open` in CI to gate PRs on "the project opens in C3"
 - Diff C3's own save against input to learn C3's canonical formatting per release automatically

@@ -1,14 +1,15 @@
-// Drive the hosted editor: launch with a persistent profile, stage a project in OPFS, and
+// Drive the hosted editor: launch a browser profile, stage a project in OPFS, and
 // open it through the editor's own "Open local file/folder" menu items with the pickers
 // shimmed to return the staged handle (see tasks/open-project.md).
 import { chromium, type BrowserContext, type Page } from "playwright";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Release } from "./release.ts";
 import type { ProjectInfo } from "./project.ts";
 
-export const DEFAULT_PROFILE = path.join(os.homedir(), ".config", "c3cli", "profile");
+// Thrown when the requested release doesn't exist: a usage error, not an editor failure.
+export class ReleaseNotFound extends Error {}
 
 // A string, not a function: tsx/esbuild's keepNames wraps named functions in __name(),
 // which doesn't exist in the page. The first line also defines it, as a no-op, for every
@@ -35,20 +36,29 @@ const STAGE_BATCH_BYTES = 8 * 1024 * 1024;
 
 export interface Session { context: BrowserContext; page: Page; close(): Promise<void> }
 
-export async function launch(opts: { profile: string; headed: boolean }): Promise<Session> {
-  const context = await chromium.launchPersistentContext(opts.profile, {
+// Without `profile`, each run gets a fresh temporary profile that is deleted on close:
+// no leftover addons, recovery prompts or settings between runs.
+export async function launch(opts: { profile?: string; headed: boolean }): Promise<Session> {
+  const temp = opts.profile ? null : await mkdtemp(path.join(os.tmpdir(), "c3cli-profile-"));
+  const context = await chromium.launchPersistentContext(opts.profile ?? temp!, {
     headless: !opts.headed,
     viewport: { width: 1400, height: 900 },
   });
   await context.addInitScript(PICKER_SHIM);
   const page = context.pages()[0] ?? (await context.newPage());
-  return { context, page, close: () => context.close() };
+  return {
+    context, page,
+    close: async () => {
+      await context.close();
+      if (temp) await rm(temp, { recursive: true, force: true });
+    },
+  };
 }
 
 // Load the editor and get it to an idle start page. Returns the dialogs dismissed on the way.
 export async function loadEditor(page: Page, release: Release, timeoutMs: number): Promise<string[]> {
   const res = await page.goto(release.url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
-  if (res && !res.ok()) throw new Error(`editor release ${release.name} not available (HTTP ${res.status()} for ${release.url})`);
+  if (res && !res.ok()) throw new ReleaseNotFound(`editor release ${release.name} not available (HTTP ${res.status()} for ${release.url})`);
   await page.waitForSelector("#mainMenuButton", { timeout: timeoutMs });
   await page.waitForTimeout(1500);
   return dismissDialogs(page);
@@ -113,13 +123,18 @@ export async function stageProject(page: Page, project: ProjectInfo, runId: stri
   return files.length;
 }
 
-// Click Menu → Project → Open local file/folder. Throws if the editor never asked for a picker.
-export async function clickOpen(page: Page, kind: ProjectInfo["kind"]): Promise<void> {
+// Click Menu → Project → <item>, the item picked by its title attribute.
+export async function clickProjectMenuItem(page: Page, title: string): Promise<void> {
   await page.click("#mainMenuButton");
   await page.locator("ui-menuitem[sub-menu]").first().click();
   // The submenu animates in; a click during the animation is silently dropped.
   await page.waitForTimeout(500);
-  await page.locator(`ui-menuitem[title="${MENU_TITLES[kind]}"]`).click();
+  await page.locator(`ui-menuitem[title="${title}"]`).click();
+}
+
+// Click Menu → Project → Open local file/folder. Throws if the editor never asked for a picker.
+export async function clickOpen(page: Page, kind: ProjectInfo["kind"]): Promise<void> {
+  await clickProjectMenuItem(page, MENU_TITLES[kind]);
   await page.waitForFunction(() => (window as any).__c3cliPick === null, null, { timeout: 5000 }).catch(() => {
     throw new Error("the editor did not ask for a file/folder picker after clicking the open menu item (menu changed?)");
   });
