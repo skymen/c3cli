@@ -1,5 +1,26 @@
 # Save / export
 
+**Status:** `c3cli save` implemented for same-format save-back (2026-09-23): folder → folder,
+`.c3p` → `.c3p`. Converting between formats and Export are not started.
+
+## How it works (2026-09-23)
+Projects are opened from an OPFS copy through the shimmed pickers (open-project.md), so the
+editor holds a **writable** handle to that copy. Ctrl/Cmd+S makes the editor write through
+it: into the folder for folder projects, or rewriting the zip in place for `.c3p`.
+c3cli waits until the staged files stop changing (1.5 s quiet), copies them out to `--to`
+(never overwriting), and diffs them against the input file by file. `.c3p` files are
+unzipped first so both kinds diff as project files. No Save As, download capture, or
+`showSaveFilePicker` shim is needed.
+
+What an r495-2 save typically changes on older projects (untitled, saved r432.2):
+`savedWithRelease`, new default keys (`functionsName`, `models3d` folder, `multitexturing`,
+`fixedFramerate`), key reordering, `zAxisScale: normalized → regular` (a migration?),
+plus new files `.gitignore`, `llm-context.md`, `models3d.uistate.json`,
+`layouts/uistate/*.instancesBar.json`. c3merge's fidelity test will need to know which of
+these are canonicalisation and which are semantic.
+
+## Original notes
+
 **Status:** not started (2026-09-21)
 
 ## Save as `.c3p`

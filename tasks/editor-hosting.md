@@ -1,6 +1,15 @@
 # Editor hosting: hosted vs local dev copy
 
-**Status:** not started (2026-09-21)
+**Status:** hosted is implemented (2026-09-23, `src/release.ts`). Local dev copy **deferred**:
+skymen chose hosted only for now.
+
+## URL forms (verified 2026-09-23)
+- `/` serves stable directly (no redirect) and names its release in asset paths
+  (`r495-2/…`). c3cli takes the most frequent `rNNN(-N)/` in the index HTML.
+- `/beta/` → 307 to `/r502`; `/lts/` → 307 to `/r449-5`; `/stable/` → 301 to `/`.
+- `/rNNN/` and `/rNNN-N/` work for exact releases; unknown releases 404.
+- `savedWithRelease` in project.c3proj maps as `major*100 + patch`: 49502 = r495-2,
+  49700 = r497.
 
 ## Hosted `editor.construct.net`
 - URL prefix picks a release (`/r500/`), `stable`/`beta` are the default and the beta

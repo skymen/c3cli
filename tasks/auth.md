@@ -1,6 +1,7 @@
 # Auth and edition limits
 
-**Status:** not started (2026-09-21)
+**Status:** not started (2026-09-21). Guests are limited to **25 events**, free accounts to 50
+(seen on the start page, 2026-09-23). skymen: ignore this until login exists.
 
 - Free edition first. Record which fixture projects it refuses (limits dialog) — the lab's
   tiny projects should all fit.

@@ -13,24 +13,24 @@ limits · `[internal]` calling editor internals, demangling · `[cli]` command s
 
 ## Now
 
-- [host] Decide primary host: hosted `editor.construct.net` (version-following) vs local self-hosted copy in `~/Documents/C3 Versions/C3-r500` in `?mode=dev` (version-locked, but exposes `?project=`) — plan is both, hosted primary ([tasks/editor-hosting.md](tasks/editor-hosting.md))
-- [open] Experiment: rank the four open routes — drop event with synthetic `File`, `showOpenFilePicker` interception, `showDirectoryPicker` interception, dev-mode `?project=` — and pick one that works on the hosted editor ([tasks/open-project.md](tasks/open-project.md))
-- [observe] Detect "project opened" / "failed" / "repaired" reliably: dialog DOM, `?log-pane`, console, and the editor's own log ([tasks/observe.md](tasks/observe.md))
-- [cli] `c3cli open <folder|.c3p> [--report json]` end to end, headless, exits with a verdict ([tasks/cli-surface.md](tasks/cli-surface.md))
+- [host] Local dev copy (`?mode=dev&project=`) deferred: hosted only for now, see [tasks/editor-hosting.md](tasks/editor-hosting.md)
+- [auth] Log in to lift the guest 25-event cap (free account: 50) before relying on sweep results for bigger projects ([tasks/auth.md](tasks/auth.md))
 
 ## Normal
 
-- [save] Save back: `.c3p` via `showSaveFilePicker` interception, and save-to-folder via `showDirectoryPicker` — needed for c3merge's fidelity test (open → save → diff) ([tasks/save-export.md](tasks/save-export.md))
-- [preview] Preview a layout headless, capture runtime console errors, timebox, report ([tasks/preview.md](tasks/preview.md))
+- [save] Save across formats (folder → `.c3p` and back): only same-format save exists today ([tasks/save-export.md](tasks/save-export.md))
+- [preview] `--layout <name>` for preview: F5 only previews the active (first) layout ([tasks/preview.md](tasks/preview.md))
 - [auth] Persistent browser profile; login flow for skymen's account when free-edition limits bite; document what the free edition refuses to open ([tasks/auth.md](tasks/auth.md))
 - [internal] Per-release name map for the few internals we need (open-from-URL, project model, log), built with the demangle tool in `~/Documents/C3 Versions/C3-r500 copy/demangle`; fail loudly when a name is missing on a new release ([tasks/internal-api.md](tasks/internal-api.md))
-- [cli] Daemon mode: keep one editor tab alive, `c3cli` commands talk to it — opening the editor cold is slow (~10 s+) and the lab runs dozens of projects ([tasks/cli-surface.md](tasks/cli-surface.md#daemon))
-- [observe] Structured report: `{opened, dialogs[], logLines[], consoleErrors[], repaired: bool, durationMs}` — the contract c3merge consumes ([tasks/observe.md](tasks/observe.md#report))
+- [cli] Daemon mode: keep one editor tab alive, `c3cli` commands talk to it — one-shot `c3cli open` measured at ~6–7 s total (≈3.5 s of it is the open itself), and the lab runs dozens of projects ([tasks/cli-surface.md](tasks/cli-surface.md#daemon))
+- [observe] Report contract v1 exists (`--report json`); still missing `repaired`. Sort which save diffs are canonicalisation and which are real changes ([tasks/observe.md](tasks/observe.md#report))
+- [open] Staging is one `evaluate` per ~8 MB batch of base64; measure on big projects (backupadam has 1918 files) and consider `page.route` streaming
+- [cli] Menu items are found by English `title` text; find a language-independent handle (lang keys are available, see observe.md)
 
 ## Later
 
 - [save] Export (HTML5 zip, others) via menu automation + download capture ([tasks/save-export.md](tasks/save-export.md#export))
-- [host] Pin a release: `c3cli --release r500` runs the local copy; `--release stable|beta` uses hosted with the release picker ([tasks/editor-hosting.md](tasks/editor-hosting.md))
+- [host] Pin a release against the *local* copy (hosted `--release rNNN` / `--branch` already work) ([tasks/editor-hosting.md](tasks/editor-hosting.md))
 - [cli] `c3cli eval <js>` against the editor page for ad-hoc experiments; `c3cli screenshot`
 - [cli] Scripted edits ("open, rename object type X, save") for generating merge fixtures inside the real editor — only if the internal API turns out stable enough
 - [docs] README, and a "how the editor loads a project" write-up from what the lab finds
