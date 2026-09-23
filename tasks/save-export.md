@@ -4,6 +4,14 @@
 `.c3p` → `.c3p`. `c3cli export` implemented for Web (HTML5) (2026-09-23). Other platforms
 and format conversion are not started.
 
+## Save as project folder (2026-09-23)
+`project.saveAs(to)` (library only) uses Menu → Project → Save as → "Save as project
+folder..." (`title="Save the project to a folder."`), with the picker shim returning a
+fresh, empty OPFS folder `c3cli/<runId>-saveas`. It writes **every** file from memory.
+Ctrl+S (`save`) only rewrites files C3 considers changed, on stable and beta alike, which
+c3merge's lab found out the hard way. A fresh profile first shows a "Set up backups"
+`#confirmDialog`; c3cli clicks "Save anyway" (`.cancelConfirmButton`).
+
 ## Web export (2026-09-23, r495-2)
 - Menu → Project → Export (`title="Export the project for publishing to a platform."`) →
   `#exportSelectPlatformDialog`: platform tiles are `ui-iconviewitem`s with no id or data

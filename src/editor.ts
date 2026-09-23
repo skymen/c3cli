@@ -157,6 +157,20 @@ export async function clickProjectMenuItem(page: Page, title: string): Promise<v
   await page.locator(`ui-menuitem[title="${title}"]`).click();
 }
 
+// Click Menu → Project → <submenu> → <item>, the submenu by its label and the item by title.
+export async function clickProjectSubmenuItem(page: Page, submenu: string, title: string): Promise<void> {
+  await page.click("#mainMenuButton");
+  await page.locator("ui-menuitem[sub-menu]").first().click();
+  await page.waitForTimeout(500);
+  const labels = await page.locator("ui-menuitem[sub-menu]").evaluateAll((els) =>
+    els.map((e) => ((e as HTMLElement).offsetParent ? (e as HTMLElement).innerText.trim().split("\n")[0] : "")));
+  const index = labels.indexOf(submenu);
+  if (index < 0) throw new Error(`no "${submenu}" submenu in the Project menu`);
+  await page.locator("ui-menuitem[sub-menu]").nth(index).click();
+  await page.waitForTimeout(500);
+  await page.locator(`ui-menuitem[title="${title}"]`).click();
+}
+
 // Click Menu → Project → Open local file/folder. Throws if the editor never asked for a picker.
 export async function clickOpen(page: Page, kind: ProjectInfo["kind"]): Promise<void> {
   await clickProjectMenuItem(page, MENU_TITLES[kind]);
@@ -176,8 +190,9 @@ export async function listFiles(dir: string, base = dir): Promise<string[]> {
 }
 
 // lastModified of every staged file, keyed by path relative to the staged project root.
-export async function snapshotStaged(page: Page): Promise<Record<string, number>> {
-  return page.evaluate(async () => {
+// `root` names the window global holding the folder handle (the staged project by default).
+export async function snapshotStaged(page: Page, root = "__c3cliRun"): Promise<Record<string, number>> {
+  return page.evaluate(async (root) => {
     const out: Record<string, number> = {};
     const walk = async (d: FileSystemDirectoryHandle, pre: string) => {
       for await (const [name, h] of (d as any).entries()) {
@@ -185,9 +200,9 @@ export async function snapshotStaged(page: Page): Promise<Record<string, number>
         else out[pre + name] = (await h.getFile()).lastModified;
       }
     };
-    await walk((window as any).__c3cliRun, "");
+    await walk((window as any)[root], "");
     return out;
-  });
+  }, root);
 }
 
 // Trigger the editor's own save (Ctrl/Cmd+S). It writes through the handle it was given
@@ -209,19 +224,50 @@ export async function saveInEditor(page: Page, timeoutMs: number, quietMs = 1500
   return Object.keys(last).filter((k) => last[k] !== before[k]).sort();
 }
 
+const SAVE_AS_FOLDER_TITLE = "Save the project to a folder.";
+
+// "Save as project folder" into a fresh, empty OPFS folder (c3cli/<runId>-saveas). Unlike
+// Ctrl+S, which only rewrites files C3 considers changed, this writes every file from what
+// the editor holds in memory. Resolves once writes stop for quietMs.
+export async function saveAsFolderInEditor(page: Page, runId: string, timeoutMs: number, quietMs = 1500): Promise<string[]> {
+  await dismissDialogs(page);
+  await page.evaluate(async (name) => {
+    const root = await navigator.storage.getDirectory();
+    const runs = await root.getDirectoryHandle("c3cli", { create: true });
+    await runs.removeEntry(name, { recursive: true }).catch(() => {});
+    const w = window as any;
+    w.__c3cliSaveAs = await runs.getDirectoryHandle(name, { create: true });
+    w.__c3cliPick = w.__c3cliSaveAs;
+  }, `${runId}-saveas`);
+  await clickProjectSubmenuItem(page, "Save as", SAVE_AS_FOLDER_TITLE);
+  const deadline = Date.now() + timeoutMs;
+  let last: Record<string, number> = {}, lastChangeAt = 0;
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(250);
+    // A fresh profile gets a "Set up backups" nag before the picker: "Save anyway".
+    await page.click("#confirmDialog[open] .cancelConfirmButton", { timeout: 200 }).catch(() => {});
+    const now = await snapshotStaged(page, "__c3cliSaveAs");
+    const moved = Object.keys(now).some((k) => now[k] !== last[k]) || Object.keys(last).some((k) => !(k in now));
+    if (moved) { last = now; lastChangeAt = Date.now(); }
+    else if (lastChangeAt && Date.now() - lastChangeAt >= quietMs) break;
+  }
+  if (!lastChangeAt) throw new Error("the editor wrote nothing after Save as project folder");
+  return Object.keys(last).sort();
+}
+
 // Copy the staged OPFS project out to disk, one file per evaluate to bound message size.
-export async function exportStaged(page: Page, outDir: string): Promise<number> {
-  const rels = Object.keys(await snapshotStaged(page));
+export async function exportStaged(page: Page, outDir: string, root = "__c3cliRun"): Promise<number> {
+  const rels = Object.keys(await snapshotStaged(page, root));
   for (const rel of rels) {
-    const b64: string = await page.evaluate(async (rel) => {
-      let dir: FileSystemDirectoryHandle = (window as any).__c3cliRun;
+    const b64: string = await page.evaluate(async ({ rel, root }) => {
+      let dir: FileSystemDirectoryHandle = (window as any)[root];
       const parts = rel.split("/");
       for (const p of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(p);
       const bytes = new Uint8Array(await (await (await dir.getFileHandle(parts.at(-1)!)).getFile()).arrayBuffer());
       let bin = "";
       for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
       return btoa(bin);
-    }, rel);
+    }, { rel, root });
     const dest = path.join(outDir, ...rel.split("/"));
     await mkdir(path.dirname(dest), { recursive: true });
     await writeFile(dest, Buffer.from(b64, "base64"));

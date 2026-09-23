@@ -13,6 +13,12 @@ code in `src/preview.ts`.
   ("Preview layout"). The runtime's *first tick* is already on that layout: it starts
   there, it doesn't start the project and switch.
 
+## When the editor refuses to preview
+Some projects load but can't be previewed: the editor shows `#okDialog` "Failed to start
+preview" (c3merge lab row 29, truncated tile data). `LivePreview.start` races the popup
+against an editor dialog and fails at once with the dialog text, instead of waiting out
+the 20 s popup timeout.
+
 ## Reaching the live runtime
 The runtime instance is private, but `C3.Runtime.prototype.Tick` runs every frame.
 c3cli wraps it once to catch `this`, keeps `this.GetIRuntime()` (the public scripting

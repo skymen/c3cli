@@ -15,7 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Page } from "playwright";
 import { diffProjects, type SaveDiff } from "./diff.ts";
-import { clickOpen, exportStaged, removeStaged, saveInEditor, stageProject } from "./editor.ts";
+import { clickOpen, exportStaged, removeStaged, saveAsFolderInEditor, saveInEditor, stageProject } from "./editor.ts";
 import { exportWeb, type ExportOptions, type ExportResult } from "./export.ts";
 import { collect, parseMissingAddons, waitForOutcome, type BundledAddon, type DialogInfo, type MissingAddon, type Outcome } from "./observe.ts";
 import { EditorLoadError, LocalPool, type Lease, type TabSource, type TabStartup } from "./pool.ts";
@@ -202,6 +202,22 @@ export class OpenedProject {
     }
   }
 
+  // "Save as project folder" to `to` (a new or empty folder), diffed with the input. Unlike
+  // save(), which is Ctrl+S and only rewrites files C3 considers changed, this writes every
+  // file from the editor's memory: use it to see what C3 actually holds for the project.
+  // Afterwards the editor's project location is the new folder.
+  async saveAs(to: string, opts: { timeoutMs?: number } = {}): Promise<SaveReport> {
+    this.requireOpened("save as");
+    await checkTarget(to, "folder");
+    try {
+      const written = await saveAsFolderInEditor(this.page, this.runId, opts.timeoutMs ?? 30_000);
+      await exportStaged(this.page, to, "__c3cliSaveAs");
+      return { to: path.resolve(to), ok: true, written, diff: await diffProjects(this.info.path, to) };
+    } catch (e) {
+      return { to: path.resolve(to), ok: false, written: [], diff: null, error: (e as Error).message };
+    }
+  }
+
   // Web (HTML5) export to a new .zip, or unzipped into a new/empty folder.
   async export(to: string, options: ExportOptions = {}, opts: { timeoutMs?: number } = {}): Promise<ExportReport> {
     this.requireOpened("export");
@@ -246,6 +262,7 @@ export class OpenedProject {
     for (const p of this.previews) await p.close();
     if (this.lease) {
       await removeStaged(this.lease.page, this.runId);
+      await removeStaged(this.lease.page, `${this.runId}-saveas`);
       await this.lease.done();
     }
   }

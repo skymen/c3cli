@@ -101,7 +101,18 @@ export class LivePreview extends EventEmitter<PreviewEvents> {
     const popupP = editor.waitForEvent("popup", { timeout: 20_000 });
     if (opts.layout) await editor.keyboard.press("F5");
     else await clickProjectMenuItem(editor, PROJECT_PREVIEW_TITLE);
-    const window = await popupP.catch(() => { throw new Error("no preview window opened within 20 s"); });
+    // If the editor can't build the preview it shows a dialog instead ("Failed to start
+    // preview"): report that right away rather than waiting out the popup timeout.
+    const refusedP = editor.waitForFunction(() => {
+      const d = document.querySelector("dialog[open]:not(#progressDialog)") as HTMLElement | null;
+      return d ? d.innerText.replace(/\s+/g, " ").trim() : null;
+    }, null, { timeout: 20_000, polling: 250 }).then((h) => h.jsonValue() as Promise<string>, () => null);
+    const first = await Promise.race([popupP.then((w) => ({ w }), () => null), refusedP.then((t) => (t ? { t } : null))]);
+    if (first && "t" in first) {
+      await dismissDialogs(editor);
+      throw new Error(`the editor refused to start the preview: ${first.t}`);
+    }
+    const window = first?.w ?? (await popupP.catch(() => { throw new Error("no preview window opened within 20 s"); }));
     const preview = new LivePreview(window, opts.remote);
     await window.waitForLoadState("domcontentloaded").catch(() => {});
     return preview;

@@ -13,7 +13,8 @@ const editor = await C3Editor.connect();            // daemon's warm tabs
 const project = await editor.open("game.c3p", { useProjectRelease: true });
 project.report;                                     // same report as `c3cli open --report json`
 if (project.report.outcome === "opened") {
-  await project.save("out/");                       // → SaveReport with a diff
+  await project.save("out/");                       // Ctrl+S: rewrites only files C3 considers changed
+  await project.saveAs("full/");                    // Save as folder: every file, from memory
   await project.export("out.zip", { minify: "none" });
   const preview = await project.preview({ layout: "Level 1" });  // or {} for the whole project
   await preview.eval((runtime) => runtime.layout.name);          // IRuntime, page or worker
