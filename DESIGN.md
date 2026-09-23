@@ -51,7 +51,8 @@ gives scope-aware bindings; the map is `{ release: { openFromUrl: "Vz.Knr", ... 
 **(decided 2026-09-23)** c3cli never saves a project with an older release than it was
 saved with, and never lowers `savedWithRelease` to get past the editor's "saved in a newer
 version" refusal. Going back a release can silently lose data; it stays a manual decision.
-`--use-project-release` only ever moves *up* to the project's release.
+`--use-project-release` opens with exactly the release the project was saved with (skymen,
+2026-09-23): older or newer than the default, never older than the project.
 
 ## Non-goals
 - Reimplementing the editor's project loader. That's what running the real editor is for.

@@ -15,7 +15,6 @@ limits · `[internal]` calling editor internals, demangling · `[cli]` command s
 ## Now
 
 - [open] Opening a folder that is a git repo root stages its whole `.git` directory (428 MB for Under The Red Sky) and the page dies ("Target page, context or browser has been closed"). Skip `.git` (and other non-project dirs) when staging. Found via c3merge `scripts/replay-merge.ts` (2026-09-23)
-- [open] `--use-project-release` only switches when the project is newer than stable; an LTS-only project (SDK v1 addons, e.g. Under The Red Sky on r449) opens on stable and hits missing addons. Consider using the project's branch when it is older too, or say so in the report
 
 ## Normal
 

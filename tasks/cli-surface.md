@@ -4,7 +4,8 @@
 
 Release selection (skymen, 2026-09-23): stable by default; `--branch stable|beta|lts`;
 `--release rNNN` exact. If the project was saved with a newer release, ask at a TTY
-("Open with rX instead? [Y/n]"). `--use-project-release` switches without asking. When not
+("Open with rX instead? [Y/n]"). `--use-project-release` always uses the project's exact
+release, older or newer (an LTS-only project needs its own release). When not
 interactive, keep the release and let the editor refuse (`refused-newer-release`).
 
 Commands and flags as in DESIGN.md. Decisions:

@@ -101,9 +101,11 @@ export class C3Editor {
     const info = await readProjectInfo(projectPath);
     const notes: string[] = [];
     let release = await resolveRelease(opts);
-    if (opts.useProjectRelease && info.savedWithRelease && info.savedWithRelease > release.num) {
+    // useProjectRelease: exactly the release the project was saved with, older or newer
+    // (an LTS-only project with SDK v1 addons only opens on its own release).
+    if (opts.useProjectRelease && info.savedWithRelease && info.savedWithRelease !== release.num) {
       const projectRelease = releaseName(info.savedWithRelease);
-      notes.push(`project was saved with ${projectRelease}, newer than ${release.name}; using ${projectRelease}`);
+      notes.push(`project was saved with ${projectRelease}; using ${projectRelease} instead of ${release.name}`);
       release = exactRelease(projectRelease);
     } else if (info.savedWithRelease && info.savedWithRelease > release.num) {
       notes.push(`project was saved with ${releaseName(info.savedWithRelease)}, newer than ${release.name}; expect a refusal`);

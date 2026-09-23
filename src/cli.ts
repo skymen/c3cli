@@ -37,7 +37,7 @@ function withOpenOptions(cmd: Command): Command {
   .argument("<project>", "project folder or .c3p file")
   .addOption(new Option("--branch <branch>", "editor branch").choices(["stable", "beta", "lts"]).default("stable"))
   .option("--release <rNNN>", "exact editor release, e.g. r497 or r495-2 (overrides --branch)")
-  .option("--use-project-release", "if the project was saved with a newer release, open it with that release", false)
+  .option("--use-project-release", "open the project with exactly the release it was saved with", false)
   .addOption(new Option("--report <format>", "machine-readable report on stdout").choices(["json"]))
   .option("--timeout <seconds>", "give up after this long", (v) => Number(v), 60)
   .option("--headed", "show the browser window", false)
@@ -312,16 +312,18 @@ async function getEditor(opts: OpenOpts): Promise<{ editor: C3Editor; via: "daem
   return { editor: await C3Editor.launch({ profile: opts.profile, headed: opts.headed || opts.keepOpen }), via: "local" };
 }
 
-// A project saved with a newer release than the chosen one will be refused by the editor.
-// Switch to the project's release when asked to (flag), or ask when someone is at the terminal.
+// --use-project-release: exactly the release the project was saved with, older or newer.
+// Otherwise a project saved with a newer release will be refused by the editor: ask when
+// someone is at the terminal.
 async function maybeUseProjectRelease(release: Release, saved: number | null, opts: OpenOpts, notes: string[]): Promise<Release> {
-  if (!saved || saved <= release.num) return release;
+  if (!saved || saved === release.num) return release;
   const projectRelease = releaseName(saved);
-  const msg = `project was saved with ${projectRelease}, newer than ${release.name}`;
   if (opts.useProjectRelease) {
-    notes.push(`${msg}; using ${projectRelease} (--use-project-release)`);
+    notes.push(`project was saved with ${projectRelease}; using ${projectRelease} instead of ${release.name} (--use-project-release)`);
     return exactRelease(projectRelease);
   }
+  if (saved < release.num) return release;
+  const msg = `project was saved with ${projectRelease}, newer than ${release.name}`;
   if (process.stdin.isTTY && process.stderr.isTTY) {
     const rl = createInterface({ input: process.stdin, output: process.stderr });
     const answer = (await rl.question(`${msg}. Open with ${projectRelease} instead? [Y/n] `)).trim().toLowerCase();
