@@ -1,7 +1,7 @@
 # Editor hosting: hosted vs local dev copy
 
-**Status:** hosted is implemented (2026-09-23, `src/release.ts`). Local dev copy **deferred**:
-skymen chose hosted only for now.
+**Status:** hosted is implemented (2026-09-23, `src/release.ts`). Local dev copy **dropped**
+(skymen, 2026-09-23). The notes on it below are kept for reference only.
 
 ## URL forms (verified 2026-09-23)
 - `/` serves stable directly (no redirect) and names its release in asset paths

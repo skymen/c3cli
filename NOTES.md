@@ -13,32 +13,26 @@ limits · `[internal]` calling editor internals, demangling · `[cli]` command s
 
 ## Now
 
-- [host] Local dev copy (`?mode=dev&project=`) deferred: hosted only for now, see [tasks/editor-hosting.md](tasks/editor-hosting.md)
-- [auth] Test the `c3cli login` success path from a fresh profile with the skymen_auto test account (`.env`, gitignored); skymen rotates the password afterwards ([tasks/auth.md](tasks/auth.md))
+- [cli] Daemon mode + Node library, designed together: one long-lived editor session, live handles for preview control ([tasks/cli-surface.md](tasks/cli-surface.md#daemon))
 
 ## Normal
 
 - [save] Save across formats (folder → `.c3p` and back): only same-format save exists today ([tasks/save-export.md](tasks/save-export.md))
-- [preview] `--layout <name>` for preview: F5 only previews the active (first) layout ([tasks/preview.md](tasks/preview.md))
-- [auth] Persistent browser profile; login flow for skymen's account when free-edition limits bite; document what the free edition refuses to open ([tasks/auth.md](tasks/auth.md))
+- [preview] Full-project preview by default (Menu → Preview); `--layout <name>` previews that layout directly, like "Preview layout" in the editor, not a project preview that then switches ([tasks/preview.md](tasks/preview.md))
 - [internal] Per-release name map for the few internals we need (open-from-URL, project model, log), built with the demangle tool in `~/Documents/C3 Versions/C3-r500 copy/demangle`; fail loudly when a name is missing on a new release ([tasks/internal-api.md](tasks/internal-api.md))
-- [cli] Daemon mode: keep one editor tab alive, `c3cli` commands talk to it — one-shot `c3cli open` measured at ~6–7 s total (≈3.5 s of it is the open itself), and the lab runs dozens of projects ([tasks/cli-surface.md](tasks/cli-surface.md#daemon))
 - [observe] Report contract v1 exists (`--report json`); still missing `repaired`. Sort which save diffs are canonicalisation and which are real changes ([tasks/observe.md](tasks/observe.md#report))
 - [open] Staging is one `evaluate` per ~8 MB batch of base64; measure on big projects (backupadam has 1918 files) and consider `page.route` streaming
 - [cli] Menu items are found by English `title` text; find a language-independent handle (lang keys are available, see observe.md)
 
 ## Later
 
-- [save] Export to other platforms (Cordova, desktop, Arcade…) and `exportTo=folder` via the picker shim ([tasks/save-export.md](tasks/save-export.md))
-
-- [host] Pin a release against the *local* copy (hosted `--release rNNN` / `--branch` already work) ([tasks/editor-hosting.md](tasks/editor-hosting.md))
 - [cli] `c3cli eval <js>` against the editor page for ad-hoc experiments; `c3cli screenshot`
 - [cli] Scripted edits ("open, rename object type X, save") for generating merge fixtures inside the real editor — only if the internal API turns out stable enough
 - [docs] README, and a "how the editor loads a project" write-up from what the lab finds
 
 ## Ideas
 
-- Node library alongside the CLI (`import { openEditor } from "c3cli"`): hand back live handles so callers can drive the preview (evaluate in the runtime, read state, send input), which is more than a one-shot CLI can express (skymen, 2026-09-23)
+- Export to other platforms (Cordova, desktop, Arcade…): skymen says ignore for now
 
 - Run as a GitHub Action service: `c3cli open` in CI to gate PRs on "the project opens in C3"
 - Diff C3's own save against input to learn C3's canonical formatting per release automatically

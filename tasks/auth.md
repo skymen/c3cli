@@ -1,7 +1,9 @@
 # Auth and edition limits
 
-**Status:** `c3cli login` / `c3cli whoami` implemented (2026-09-23). Only the failure path is
-tested (two fake logins); the success path needs real credentials, which skymen runs.
+**Status:** done (2026-09-23). Failure path tested with two fake logins; success path tested
+from a fresh profile with the skymen_auto test account via `.env` (gitignored). Password
+found 0 times in the output and 0 times anywhere in the profile, and Chromium created no
+saved-password database. skymen rotates the password after testing.
 
 ## Login flow (r495-2)
 - Menu → Account → "Log in" → `#loginDialog`, which holds an iframe

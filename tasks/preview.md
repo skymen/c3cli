@@ -1,7 +1,27 @@
 # Preview
 
-**Status:** `c3cli preview <project> [--seconds N]` implemented (2026-09-23). `--layout` is
-not done: F5 previews the active layout, which after an open is the first one.
+**Status:** `c3cli preview <project> [--seconds N] [--layout <name>]` implemented (2026-09-23),
+code in `src/preview.ts`.
+
+## Modes (skymen, 2026-09-23)
+- Default: **whole-project preview** (Menu → Project → Preview,
+  `title="Run a preview of the current project."`), which starts on the project's first
+  layout.
+- `--layout <name>`: make that layout the active view (double-click its
+  `ui-treeitem.layout .tree-item-name` in the Project bar; the handler is on the name
+  label, not the item; then wait for `ui-tab[active]` with that name) and press F5
+  ("Preview layout"). The runtime's *first tick* is already on that layout: it starts
+  there, it doesn't start the project and switch.
+
+## Reaching the live runtime
+The runtime instance is private, but `C3.Runtime.prototype.Tick` runs every frame.
+c3cli wraps it once to catch `this`, keeps `this.GetIRuntime()` (the public scripting
+API) in `globalThis.__c3cliRuntime`, and restores the method. It checks the preview page
+first (DOM mode, e.g. 3d-lighting) and then each worker (worker mode, e.g. untitled).
+`Preview.evalRuntime("return runtime.layout.name")` runs code against it. This is the
+hook the Node library will build on. The report now has `startLayout` and
+`runtimeIn: page|worker`. A preview whose runtime loads but never ticks
+(`_runtime-error` throws in `beforeprojectstart`) is "crashed during startup", exit 3.
 
 ## Findings (2026-09-23)
 - F5 opens a popup at `https://preview.construct.net/local.html`; `context.waitForEvent("page")`

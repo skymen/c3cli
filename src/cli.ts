@@ -9,7 +9,8 @@ import path from "node:path";
 import { diffProjects, type SaveDiff } from "./diff.ts";
 import { LOSSLESS_FORMATS, LOSSY_FORMATS, MINIFY_MODES, exportWeb, type ExportOptions, type ExportResult } from "./export.ts";
 import { unzipProject } from "./unzip.ts";
-import { ReleaseNotFound, clickOpen, exportStaged, launch, loadEditor, runPreview, saveInEditor, stageProject, type PreviewResult } from "./editor.ts";
+import { ReleaseNotFound, clickOpen, exportStaged, launch, loadEditor, saveInEditor, stageProject } from "./editor.ts";
+import { runPreview, type PreviewResult } from "./preview.ts";
 import { collect, parseMissingAddons, waitForOutcome, type Outcome } from "./observe.ts";
 import { isLoggedIn, logIn, waitForAccount } from "./login.ts";
 import { readProjectInfo } from "./project.ts";
@@ -62,9 +63,10 @@ async function guarded(opts: OpenOpts, run: () => Promise<number>) {
 withOpenOptions(program.command("open").description("Open a project (folder or .c3p) in the editor and report what happened"))
   .action((projectPath: string, opts: OpenOpts) => guarded(opts, () => runCommand(projectPath, opts)));
 
-withOpenOptions(program.command("preview").description("Open a project, preview its first layout, and report runtime console errors"))
+withOpenOptions(program.command("preview").description("Open a project, preview it (the whole project, or one layout), and report runtime errors"))
   .option("--seconds <n>", "how long to let the preview run", (v) => Number(v), 10)
-  .action((projectPath: string, opts: OpenOpts & { seconds: number }) => guarded(opts, () => runCommand(projectPath, opts, { kind: "preview", seconds: opts.seconds })));
+  .option("--layout <name>", "preview this layout directly (like \"Preview layout\" in the editor) instead of the whole project")
+  .action((projectPath: string, opts: OpenOpts & { seconds: number; layout?: string }) => guarded(opts, () => runCommand(projectPath, opts, { kind: "preview", seconds: opts.seconds, layout: opts.layout })));
 
 withOpenOptions(program.command("export").description("Open a project and export it for the web (HTML5), as a zip or unzipped into a folder"))
   .requiredOption("--to <path>", "a new .zip file, or a new/empty folder to unzip the export into (never overwritten)")
@@ -81,7 +83,7 @@ withOpenOptions(program.command("save").description("Open a project, save it wit
   .requiredOption("--to <path>", "where to write the saved project: a new folder for folder projects, a new .c3p for .c3p projects (never overwritten)")
   .action((projectPath: string, opts: OpenOpts & { to: string }) => guarded(opts, () => runCommand(projectPath, opts, { kind: "save", to: opts.to })));
 
-type Then = { kind: "save"; to: string } | { kind: "preview"; seconds: number } | { kind: "export"; to: string; options: ExportOptions };
+type Then = { kind: "save"; to: string } | { kind: "preview"; seconds: number; layout?: string } | { kind: "export"; to: string; options: ExportOptions };
 
 interface AccountOpts { profile: string; branch: Branch; release?: string; timeout: number; headed: boolean; report?: "json" }
 
@@ -241,8 +243,8 @@ async function runCommand(projectPath: string, opts: OpenOpts, then?: Then): Pro
     let preview: PreviewResult | undefined;
     if (then?.kind === "preview") {
       preview = outcome === "opened"
-        ? await runPreview(session.context, page, then.seconds)
-        : { started: false, url: null, seconds: then.seconds, log: [], consoleErrors: [], pageErrors: [], error: `not previewed: project did not open (${outcome})` };
+        ? await runPreview(session.context, page, { seconds: then.seconds, layout: then.layout })
+        : { started: false, url: null, seconds: then.seconds, requestedLayout: then.layout ?? null, startLayout: null, runtimeIn: null, log: [], consoleErrors: [], pageErrors: [], error: `not previewed: project did not open (${outcome})` };
     }
 
     let exported: (Omit<ExportResult, "zipPath"> & { to: string; files: number | null }) | undefined;
@@ -304,7 +306,7 @@ async function runCommand(projectPath: string, opts: OpenOpts, then?: Then): Pro
     }
     if (preview) {
       if (outcome !== "opened") return exitCode(outcome, true);
-      if (!preview.started) return EXIT.crashed;
+      if (!preview.started || preview.error) return EXIT.crashed;
       return preview.pageErrors.length + preview.consoleErrors.length ? EXIT.warnings : EXIT.clean;
     }
     if (report.save && !report.save.ok) return outcome === "opened" ? EXIT.crashed : exitCode(outcome, true);
@@ -395,7 +397,7 @@ function printHuman(r: { export?: { outcome: string; to: string; files: number |
   if (r.preview) {
     const p = r.preview;
     if (!p.started) console.log(`  preview failed: ${p.error}`);
-    else console.log(`  preview ran ${p.seconds}s: ${p.pageErrors.length} uncaught error(s), ${p.consoleErrors.length} console error(s)`);
+    else console.log(`  preview ran ${p.seconds}s from "${p.startLayout}" (runtime in ${p.runtimeIn}): ${p.pageErrors.length} uncaught error(s), ${p.consoleErrors.length} console error(s)${p.error ? ` — ${p.error}` : ""}`);
     for (const e of [...p.pageErrors, ...p.consoleErrors].slice(0, 10)) console.log(`    ! ${e.split("\n")[0].slice(0, 200)}`);
   }
   if (r.export) {

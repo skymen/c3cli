@@ -203,39 +203,3 @@ export async function exportStaged(page: Page, outDir: string): Promise<number> 
   }
   return rels.length;
 }
-
-export interface PreviewResult {
-  started: boolean;
-  url: string | null;
-  seconds: number;
-  log: string[];
-  consoleErrors: string[];
-  pageErrors: string[];
-  error?: string;
-}
-
-// Press F5 (Preview layout), catch the preview window, and record its console for `seconds`.
-// The runtime runs in a worker, but worker console output and uncaught worker errors both
-// surface on the preview page's console/pageerror events (checked 2026-09-23).
-export async function runPreview(context: BrowserContext, page: Page, seconds: number): Promise<PreviewResult> {
-  const r: PreviewResult = { started: false, url: null, seconds, log: [], consoleErrors: [], pageErrors: [] };
-  await dismissDialogs(page);
-  const popupP = context.waitForEvent("page", { timeout: 20_000 });
-  await page.keyboard.press("F5");
-  let popup: Page;
-  try { popup = await popupP; } catch { return { ...r, error: "no preview window opened within 20 s of pressing F5" }; }
-  popup.on("console", (m) => {
-    const text = m.text();
-    if (/Registered (root )?service worker/.test(text)) return;
-    if (m.type() === "error") r.consoleErrors.push(text);
-    else r.log.push(`[${m.type()}] ${text}`);
-  });
-  popup.on("pageerror", (e) => r.pageErrors.push(e.stack ?? e.message));
-  await popup.waitForLoadState("domcontentloaded").catch(() => {});
-  r.url = popup.url();
-  await popup.waitForTimeout(seconds * 1000);
-  r.started = r.log.some((l) => l.includes("[C3 runtime]"));
-  if (!r.started) r.error = "preview window opened but the runtime never logged its startup line";
-  await popup.close().catch(() => {});
-  return r;
-}
