@@ -17,6 +17,8 @@ limits · `[internal]` calling editor internals, demangling · `[cli]` command s
 
 ## Normal
 
+- [open] Install unbundled SDK v2 addons from files (drop onto the editor, reload): standalone command, daemon, library, and `--addons <folder|zip>` on every command that opens a project ([tasks/install-addons.md](tasks/install-addons.md))
+
 - [save] Save across formats (folder → `.c3p` and back): only same-format save exists today ([tasks/save-export.md](tasks/save-export.md))
 - [internal] Per-release name map for the few internals we need (open-from-URL, project model, log), built with the demangle tool in `~/Documents/C3 Versions/C3-r500 copy/demangle`; fail loudly when a name is missing on a new release ([tasks/internal-api.md](tasks/internal-api.md))
 - [observe] Report contract v1 exists (`--report json`); still missing `repaired`. Sort which save diffs are canonicalisation and which are real changes ([tasks/observe.md](tasks/observe.md#report))
