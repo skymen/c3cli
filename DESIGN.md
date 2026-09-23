@@ -46,6 +46,13 @@ per-release name map with a self-test (`c3cli doctor --release`) that fails when
 name no longer exists. The demangle tool already in `C3 Versions/C3-r500 copy/demangle`
 gives scope-aware bindings; the map is `{ release: { openFromUrl: "Vz.Knr", ... } }`.
 
+## Never downgrade
+
+**(decided 2026-09-23)** c3cli never saves a project with an older release than it was
+saved with, and never lowers `savedWithRelease` to get past the editor's "saved in a newer
+version" refusal. Going back a release can silently lose data; it stays a manual decision.
+`--use-project-release` only ever moves *up* to the project's release.
+
 ## Non-goals
 - Reimplementing the editor's project loader. That's what running the real editor is for.
 - Windows/Linux support first; macOS first, Linux (CI) second, Windows if the Action needs it.
