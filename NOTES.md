@@ -1,8 +1,9 @@
 # c3cli — backlog
 
-Drive the Construct 3 editor from the command line: open a project, watch how it loads,
-save, export, preview, log in. Consumers: `~/Documents/c3merge` (lab experiments, fidelity
-tests, CI), and anything else that wants "run this in C3 and tell me what happened".
+Drive the Construct 3 editor from the command line and from Node: open a project, watch how
+it loads, save, export, preview, log in. **A product in its own right** (skymen, 2026-09-23),
+not a helper for c3merge. `~/Documents/c3merge` is one consumer (lab experiments, fidelity
+tests) and uses it only as a dev dependency; c3cli never depends on c3merge.
 Design notes in [DESIGN.md](DESIGN.md); detail docs in [`tasks/`](tasks/).
 
 Tags: `[host]` which editor build runs and where · `[open]` getting a project into the editor ·
@@ -13,7 +14,6 @@ limits · `[internal]` calling editor internals, demangling · `[cli]` command s
 
 ## Now
 
-- [cli] Hook c3merge's tests up to the library (`"c3cli": "file:../c3cli"` dev dependency) ([tasks/library.md](tasks/library.md))
 
 ## Normal
 
