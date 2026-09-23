@@ -13,18 +13,20 @@ limits · `[internal]` calling editor internals, demangling · `[cli]` command s
 
 ## Now
 
-- [cli] Daemon mode + Node library, designed together: one long-lived editor session, live handles for preview control ([tasks/cli-surface.md](tasks/cli-surface.md#daemon))
+- [cli] Hook c3merge's tests up to the library (`"c3cli": "file:../c3cli"` dev dependency) ([tasks/library.md](tasks/library.md))
 
 ## Normal
 
 - [save] Save across formats (folder → `.c3p` and back): only same-format save exists today ([tasks/save-export.md](tasks/save-export.md))
-- [preview] Full-project preview by default (Menu → Preview); `--layout <name>` previews that layout directly, like "Preview layout" in the editor, not a project preview that then switches ([tasks/preview.md](tasks/preview.md))
 - [internal] Per-release name map for the few internals we need (open-from-URL, project model, log), built with the demangle tool in `~/Documents/C3 Versions/C3-r500 copy/demangle`; fail loudly when a name is missing on a new release ([tasks/internal-api.md](tasks/internal-api.md))
 - [observe] Report contract v1 exists (`--report json`); still missing `repaired`. Sort which save diffs are canonicalisation and which are real changes ([tasks/observe.md](tasks/observe.md#report))
 - [open] Staging is one `evaluate` per ~8 MB batch of base64; measure on big projects (backupadam has 1918 files) and consider `page.route` streaming
 - [cli] Menu items are found by English `title` text; find a language-independent handle (lang keys are available, see observe.md)
 
 ## Later
+
+- [cli] Daemon: auto-restart a tab whose editor crashed mid-lease; health check in `daemon status`
+- [cli] Integration test suite (opt-in, needs network): turn `scripts/check-*.ts` into `node --test` cases
 
 - [cli] `c3cli eval <js>` against the editor page for ad-hoc experiments; `c3cli screenshot`
 - [cli] Scripted edits ("open, rename object type X, save") for generating merge fixtures inside the real editor — only if the internal API turns out stable enough

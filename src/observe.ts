@@ -94,7 +94,9 @@ export async function waitForOutcome(page: Page, opts: {
   installBundledAddons: boolean;
 }): Promise<OpenResult> {
   const lang = await loadLang(opts.assetUrl);
-  const settleMs = opts.settleMs ?? 2000;
+  // Post-open dialogs (deprecated features) appear 25–45 ms after the title changes
+  // (measured 2026-09-23); 500 ms leaves a >10× margin.
+  const settleMs = opts.settleMs ?? 500;
   const deadline = Date.now() + opts.timeoutMs;
   const startTitle = await page.title();
   const seen = new Map<string, DialogInfo>();

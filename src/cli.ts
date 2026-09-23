@@ -2,21 +2,17 @@
 // c3cli: drive the Construct 3 editor from the command line.
 import { Command, Option } from "commander";
 import { createInterface } from "node:readline/promises";
-import { randomUUID } from "node:crypto";
-import { access, copyFile, mkdir, mkdtemp, readdir, rename, rm } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { diffProjects, type SaveDiff } from "./diff.ts";
-import { LOSSLESS_FORMATS, LOSSY_FORMATS, MINIFY_MODES, exportWeb, type ExportOptions, type ExportResult } from "./export.ts";
-import { unzipProject } from "./unzip.ts";
-import { ReleaseNotFound, clickOpen, exportStaged, launch, loadEditor, saveInEditor, stageProject } from "./editor.ts";
-import { runPreview, type PreviewResult } from "./preview.ts";
-import { collect, parseMissingAddons, waitForOutcome, type Outcome } from "./observe.ts";
+import { C3Editor, REPORT_VERSION, checkTarget, resolveRelease, type ExportReport, type SaveReport } from "./api.ts";
+import { DEFAULT_SOCKET, DaemonSource, daemonStatus, runDaemon, startDaemon, stopDaemon } from "./daemon.ts";
+import type { SaveDiff } from "./diff.ts";
+import { launch, loadEditor } from "./editor.ts";
+import { LOSSLESS_FORMATS, LOSSY_FORMATS, MINIFY_MODES, type ExportOptions } from "./export.ts";
 import { isLoggedIn, logIn, waitForAccount } from "./login.ts";
+import type { Outcome } from "./observe.ts";
+import type { PreviewResult } from "./preview.ts";
 import { readProjectInfo } from "./project.ts";
 import { exactRelease, releaseName, resolveBranch, type Branch, type Release } from "./release.ts";
-
-const REPORT_VERSION = 1;
 
 const EXIT = { clean: 0, warnings: 1, refused: 2, crashed: 3, toolError: 4 } as const;
 
@@ -30,6 +26,7 @@ interface OpenOpts {
   profile?: string;
   keepOpen: boolean;
   installBundledAddons: boolean;
+  daemon: boolean;
 }
 
 const program = new Command("c3cli").description("Drive the Construct 3 editor from the command line");
@@ -46,7 +43,8 @@ function withOpenOptions(cmd: Command): Command {
   .option("--headed", "show the browser window", false)
   .option("--profile <dir>", "use (and keep) this browser profile; default: a fresh temporary profile per run")
   .option("--no-install-bundled-addons", "decline the editor's prompt to install addons bundled in the project")
-  .option("--keep-open", "leave the editor open until the window is closed (implies --headed)", false);
+  .option("--keep-open", "leave the editor open until the window is closed (implies --headed)", false)
+  .option("--no-daemon", "use a private browser even if the daemon is running");
 }
 
 async function guarded(opts: OpenOpts, run: () => Promise<number>) {
@@ -102,6 +100,60 @@ withAccountOptions(program.command("login").description("Log in with username/em
 
 withAccountOptions(program.command("whoami").description("Show which account the editor is logged in to with --profile"))
   .action((opts: AccountOpts) => guarded(opts as OpenOpts, () => whoamiCommand(opts)));
+
+const daemon = program.command("daemon").description("Keep a warm editor running in the background, shared by every c3cli command");
+
+interface DaemonOpts { tabs: number; profile?: string; branch: Branch; release?: string; headed: boolean; report?: "json" }
+
+function withDaemonOptions(cmd: Command): Command {
+  return cmd
+    .option("--tabs <n>", "editor tabs, i.e. projects open at once", (v) => Number(v), 3)
+    .option("--profile <dir>", "browser profile for all tabs (logins live here); default: a temporary one")
+    .addOption(new Option("--branch <branch>", "release to warm the tabs with").choices(["stable", "beta", "lts"]).default("stable"))
+    .option("--release <rNNN>", "exact release to warm the tabs with (overrides --branch)")
+    .option("--headed", "show the browser window", false);
+}
+
+withDaemonOptions(daemon.command("start").description("Start the daemon in the background"))
+  .action((opts: DaemonOpts) => guarded(opts as unknown as OpenOpts, async () => {
+    const running = await daemonStatus().catch(() => null);
+    if (running) { printStatus(running, "already running"); return EXIT.clean; }
+    const args = [`--tabs`, String(opts.tabs), `--branch`, opts.branch];
+    if (opts.release) args.push("--release", opts.release);
+    if (opts.profile) args.push("--profile", path.resolve(opts.profile));
+    if (opts.headed) args.push("--headed");
+    printStatus(await startDaemon(args, DEFAULT_SOCKET), "started");
+    return EXIT.clean;
+  }));
+
+withDaemonOptions(daemon.command("run").description("Run the daemon in the foreground (what `start` launches)"))
+  .action((opts: DaemonOpts) => guarded(opts as unknown as OpenOpts, async () => {
+    const warm = await resolveRelease(opts);
+    await runDaemon({ socket: DEFAULT_SOCKET, tabs: opts.tabs, profile: opts.profile, headed: opts.headed, warm });
+    await new Promise(() => {}); // runs until stopped
+    return EXIT.clean;
+  }));
+
+daemon.command("status").description("Show whether the daemon is running and what its tabs are doing")
+  .addOption(new Option("--report <format>", "machine-readable report on stdout").choices(["json"]))
+  .action((opts: { report?: "json" }) => guarded(opts as OpenOpts, async () => {
+    const status = await daemonStatus().catch(() => null);
+    if (opts.report === "json") console.log(JSON.stringify({ running: !!status, ...status }, null, 2));
+    else if (status) printStatus(status, "running");
+    else console.log("not running");
+    return status ? EXIT.clean : EXIT.refused;
+  }));
+
+daemon.command("stop").description("Stop the daemon")
+  .action(() => guarded({} as OpenOpts, async () => {
+    console.log((await stopDaemon()) ? "stopped" : "not running");
+    return EXIT.clean;
+  }));
+
+function printStatus(s: { pid: number; startedAt: string; profile: string; tabs: { id: string; busy: boolean; release: string | null }[] }, state: string) {
+  console.log(`daemon ${state} (pid ${s.pid}, since ${s.startedAt}), profile ${s.profile}`);
+  for (const t of s.tabs) console.log(`  ${t.id}: ${t.busy ? "busy" : "free"}${t.release ? `, ${t.release}` : ""}`);
+}
 
 async function loginCommand(opts: AccountOpts): Promise<number> {
   const username = process.env.C3CLI_USERNAME || (await ask("Construct account username or email: ", false));
@@ -178,180 +230,86 @@ function askHidden(question: string): Promise<string> {
 }
 
 async function runCommand(projectPath: string, opts: OpenOpts, then?: Then): Promise<number> {
-  const saveTo = then?.kind === "save" ? then.to : undefined;
-  const project = await readProjectInfo(projectPath);
-  if (saveTo) await checkSaveTarget(saveTo, project.kind);
-  if (then?.kind === "export") await checkSaveTarget(then.to, then.to.toLowerCase().endsWith(".zip") ? "zip" : "folder");
+  const info = await readProjectInfo(projectPath);
+  if (then?.kind === "save") await checkTarget(then.to, info.kind);
+  if (then?.kind === "export") await checkTarget(then.to, then.to.toLowerCase().endsWith(".zip") ? "zip" : "folder");
   const notes: string[] = [];
-  let release = opts.release ? exactRelease(opts.release) : await resolveBranch(opts.branch);
-  release = await maybeUseProjectRelease(release, project.savedWithRelease, opts, notes);
+  let release = await resolveRelease(opts);
+  release = await maybeUseProjectRelease(release, info.savedWithRelease, opts, notes);
 
-  const headed = opts.headed || opts.keepOpen;
-  const session = await launch({ profile: opts.profile, headed });
   const started = Date.now();
+  const { editor, via } = await getEditor(opts);
+  const timeoutMs = opts.timeout * 1000;
   try {
-    const { page } = session;
-    const collector = collect(page);
-    const timeoutMs = opts.timeout * 1000;
-    let startupDialogs: string[];
+    const project = await editor.open(projectPath, {
+      release: release.name, installBundledAddons: opts.installBundledAddons, timeoutMs,
+    });
     try {
-      startupDialogs = await loadEditor(page, release, timeoutMs);
-    } catch (e) {
-      if (e instanceof ReleaseNotFound) throw e;
-      // The editor never became usable: nothing about the project can be said.
+      const outcome = project.report.outcome;
+      const opened = outcome === "opened";
+      const notOpened = `project did not open (${outcome})`;
+
+      let save: SaveReport | undefined;
+      if (then?.kind === "save") {
+        save = opened ? await project.save(then.to, { timeoutMs: Math.max(10_000, timeoutMs / 2) })
+          : { to: path.resolve(then.to), ok: false, written: [], diff: null, error: `not saved: ${notOpened}` };
+      }
+      let preview: PreviewResult | undefined;
+      if (then?.kind === "preview") {
+        preview = opened ? await project.runPreview({ seconds: then.seconds, layout: then.layout })
+          : { started: false, url: null, seconds: then.seconds, requestedLayout: then.layout ?? null, startLayout: null, runtimeIn: null, log: [], consoleErrors: [], pageErrors: [], error: `not previewed: ${notOpened}` };
+      }
+      let exported: ExportReport | undefined;
+      if (then?.kind === "export") {
+        exported = opened ? await project.export(then.to, then.options, { timeoutMs })
+          : { outcome: "export-failed", to: path.resolve(then.to), files: null, suggestedName: null, reportText: null, dialogs: [], error: `not exported: ${notOpened}` };
+      }
+
       const report = {
-        version: REPORT_VERSION, release: release.name, host: "hosted", outcome: "editor-error",
-        error: (e as Error).message.split("\n")[0],
-        startupPageErrors: collector.pageErrors, startupConsoleErrors: collector.consoleErrors, notes,
+        ...project.report,
+        notes: [...notes, ...project.report.notes.filter((n) => !notes.some((m) => m.startsWith(n.split(";")[0])))],
+        via,
+        totalMs: Date.now() - started,
+        ...(preview ? { preview } : {}),
+        ...(exported ? { export: exported } : {}),
+        ...(save ? { save } : {}),
       };
       if (opts.report === "json") console.log(JSON.stringify(report, null, 2));
-      else {
-        console.log(`editor-error  ${release.name}: ${report.error}`);
-        for (const err of collector.pageErrors.slice(0, 5)) console.log(`  ! ${err.split("\n")[0]}`);
+      else printHuman(report);
+
+      if (opts.keepOpen && opened) await project.page.waitForEvent("close", { timeout: 0 });
+      if (outcome === "editor-error") return EXIT.crashed;
+      const noisy = report.dialogs.length + report.pageErrors.length > 0;
+      if (exported) {
+        if (!opened) return exitCode(outcome, true);
+        if (exported.outcome === "refused-by-edition") return EXIT.refused;
+        if (exported.outcome !== "exported") return EXIT.crashed;
+        return exitCode(outcome, noisy);
       }
-      return EXIT.crashed;
-    }
-    const staged = await stageProject(page, project, randomUUID());
-    // Errors before this point come from the editor starting up, not from the project.
-    const startup = { pageErrors: collector.pageErrors.splice(0), consoleErrors: collector.consoleErrors.splice(0) };
-    const openedAt = Date.now();
-    await clickOpen(page, project.kind);
-    const result = await waitForOutcome(page, {
-      projectName: project.name,
-      assetUrl: release.assetUrl,
-      timeoutMs: Math.max(1000, timeoutMs - (openedAt - started)),
-      installBundledAddons: opts.installBundledAddons,
-    });
-    const openMs = Date.now() - openedAt;
-    let outcome: Outcome = result.outcome;
-    if (outcome === "timeout" && collector.pageErrors.length) outcome = "crashed";
-    // Declining a bundled addon makes the editor say only "failed to open"; name the real cause.
-    const declined = result.bundledAddons.filter((a) => !a.installed);
-    if (outcome === "refused" && declined.length) outcome = "missing-addons";
-
-    let save: { to: string; ok: boolean; written: string[]; diff: SaveDiff | null; error?: string } | undefined;
-    if (saveTo && outcome === "opened") {
-      try {
-        const written = await saveInEditor(page, Math.max(10_000, timeoutMs / 2));
-        await writeSaved(page, project.kind, saveTo);
-        save = { to: path.resolve(saveTo), ok: true, written, diff: await diffProjects(project.path, saveTo) };
-      } catch (e) {
-        save = { to: path.resolve(saveTo), ok: false, written: [], diff: null, error: (e as Error).message };
+      if (preview) {
+        if (!opened) return exitCode(outcome, true);
+        if (!preview.started || preview.error) return EXIT.crashed;
+        return preview.pageErrors.length + preview.consoleErrors.length ? EXIT.warnings : EXIT.clean;
       }
+      if (save && !save.ok) return opened ? EXIT.crashed : exitCode(outcome, true);
+      return exitCode(outcome as Outcome, noisy);
+    } finally {
+      await project.close();
     }
-
-    let preview: PreviewResult | undefined;
-    if (then?.kind === "preview") {
-      preview = outcome === "opened"
-        ? await runPreview(session.context, page, { seconds: then.seconds, layout: then.layout })
-        : { started: false, url: null, seconds: then.seconds, requestedLayout: then.layout ?? null, startLayout: null, runtimeIn: null, log: [], consoleErrors: [], pageErrors: [], error: `not previewed: project did not open (${outcome})` };
-    }
-
-    let exported: (Omit<ExportResult, "zipPath"> & { to: string; files: number | null }) | undefined;
-    if (then?.kind === "export") {
-      const toPath = path.resolve(then.to);
-      if (outcome !== "opened") {
-        exported = { outcome: "export-failed", to: toPath, files: null, suggestedName: null, reportText: null, dialogs: [], error: `not exported: project did not open (${outcome})` };
-      } else {
-        const tmp = await mkdtemp(path.join(os.tmpdir(), "c3cli-export-"));
-        try {
-          const { zipPath, ...res } = await exportWeb(page, then.options, path.join(tmp, "export.zip"), timeoutMs);
-          let files: number | null = null;
-          if (zipPath) {
-            if (toPath.toLowerCase().endsWith(".zip")) await moveFile(zipPath, toPath);
-            else files = await unzipProject(zipPath, toPath);
-          }
-          exported = { ...res, to: toPath, files };
-        } finally {
-          await rm(tmp, { recursive: true, force: true });
-        }
-      }
-    }
-
-    const report = {
-      version: REPORT_VERSION,
-      project: { path: project.path, kind: project.kind, name: project.name, savedWithRelease: project.savedWithRelease && releaseName(project.savedWithRelease) },
-      release: release.name,
-      host: "hosted",
-      outcome,
-      durationMs: openMs,
-      totalMs: Date.now() - started,
-      filesStaged: staged,
-      startupDialogs,
-      startupPageErrors: startup.pageErrors,
-      startupConsoleErrors: startup.consoleErrors,
-      dialogs: result.dialogs,
-      missingAddons: [
-        ...parseMissingAddons(result.dialogs),
-        ...declined.map((a) => ({ type: a.type ?? "Addon", name: a.name ?? "?", id: a.name ?? "?", author: a.author, declined: true })),
-      ],
-      bundledAddons: result.bundledAddons,
-      log: collector.log,
-      consoleErrors: collector.consoleErrors,
-      pageErrors: collector.pageErrors,
-      notes,
-      ...(preview ? { preview } : {}),
-      ...(exported ? { export: exported } : {}),
-      ...(saveTo ? { save: save ?? { to: path.resolve(saveTo), ok: false, written: [], diff: null, error: `not saved: project did not open (${outcome})` } } : {}),
-    };
-    if (opts.report === "json") console.log(JSON.stringify(report, null, 2));
-    else printHuman(report);
-
-    if (opts.keepOpen) await page.waitForEvent("close", { timeout: 0 });
-    if (exported) {
-      if (outcome !== "opened") return exitCode(outcome, true);
-      if (exported.outcome === "refused-by-edition") return EXIT.refused;
-      if (exported.outcome !== "exported") return EXIT.crashed;
-      return exitCode(outcome, result.dialogs.length + collector.pageErrors.length > 0);
-    }
-    if (preview) {
-      if (outcome !== "opened") return exitCode(outcome, true);
-      if (!preview.started || preview.error) return EXIT.crashed;
-      return preview.pageErrors.length + preview.consoleErrors.length ? EXIT.warnings : EXIT.clean;
-    }
-    if (report.save && !report.save.ok) return outcome === "opened" ? EXIT.crashed : exitCode(outcome, true);
-    return exitCode(outcome, result.dialogs.length + collector.pageErrors.length > 0);
   } finally {
-    await session.page.evaluate(async () => {
-      const root = await navigator.storage.getDirectory();
-      await root.removeEntry("c3cli", { recursive: true }).catch(() => {});
-    }).catch(() => {});
-    await session.close();
+    await editor.close();
   }
 }
 
-// Rename into place, creating parent folders; copy when the temp dir is on another volume.
-async function moveFile(from: string, to: string) {
-  await mkdir(path.dirname(path.resolve(to)), { recursive: true });
-  try {
-    await rename(from, to);
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "EXDEV") throw e;
-    await copyFile(from, to);
-    await rm(from, { force: true });
+// The daemon's warm editor when it's running, unless this run needs its own browser
+// (a specific profile, a visible window, or --no-daemon).
+async function getEditor(opts: OpenOpts): Promise<{ editor: C3Editor; via: "daemon" | "local" }> {
+  const ownBrowser = !opts.daemon || opts.profile || opts.headed || opts.keepOpen;
+  if (!ownBrowser) {
+    const source = await DaemonSource.connect().catch(() => null);
+    if (source) return { editor: C3Editor.fromSource(source), via: "daemon" };
   }
-}
-
-// Never overwrite: folder targets must not exist (or be empty), file targets must not exist.
-async function checkSaveTarget(to: string, kind: "folder" | "file" | "zip") {
-  if (kind === "file" && !to.toLowerCase().endsWith(".c3p")) throw new Error(`--to must be a .c3p path for a .c3p project: ${to}`);
-  const exists = await access(to).then(() => true, () => false);
-  if (!exists) return;
-  if (kind === "folder" && (await readdir(to)).length === 0) return;
-  throw new Error(`--to already exists, refusing to overwrite: ${to}`);
-}
-
-// Export the staged copy; for a .c3p the staged root holds just the one file.
-async function writeSaved(page: import("playwright").Page, kind: "folder" | "file", to: string) {
-  if (kind === "folder") { await exportStaged(page, to); return; }
-  const tmp = await mkdtemp(path.join(os.tmpdir(), "c3cli-save-"));
-  try {
-    await exportStaged(page, tmp);
-    const [file] = await readdir(tmp);
-    await moveFile(path.join(tmp, file), to);
-  } finally {
-    await rm(tmp, { recursive: true, force: true });
-  }
+  return { editor: await C3Editor.launch({ profile: opts.profile, headed: opts.headed || opts.keepOpen }), via: "local" };
 }
 
 // A project saved with a newer release than the chosen one will be refused by the editor.
@@ -385,8 +343,9 @@ function exitCode(outcome: Outcome, hadNoise: boolean): number {
   }
 }
 
-function printHuman(r: { export?: { outcome: string; to: string; files: number | null; reportText: string | null; dialogs: { id: string; text: string }[]; error?: string }; startupPageErrors: string[]; preview?: PreviewResult; save?: { to: string; ok: boolean; written: string[]; diff: SaveDiff | null; error?: string }; outcome: string; project: { name: string | null; path: string }; release: string; durationMs: number; dialogs: { id: string; langKey: string | null; title: string; body: string }[]; missingAddons: { type: string; id: string }[]; bundledAddons: { name: string | null; version: string | null; installed: boolean }[]; pageErrors: string[]; consoleErrors: string[]; notes: string[] }) {
-  console.log(`${r.outcome}  ${r.project.name ?? r.project.path}  (${r.release}, ${(r.durationMs / 1000).toFixed(1)}s)`);
+function printHuman(r: { via?: string; tab?: string; error?: string; export?: { outcome: string; to: string; files: number | null; reportText: string | null; dialogs: { id: string; text: string }[]; error?: string }; startupPageErrors: string[]; preview?: PreviewResult; save?: { to: string; ok: boolean; written: string[]; diff: SaveDiff | null; error?: string }; outcome: string; project: { name: string | null; path: string }; release: string; durationMs: number; dialogs: { id: string; langKey: string | null; title: string; body: string }[]; missingAddons: { type: string; id: string }[]; bundledAddons: { name: string | null; version: string | null; installed: boolean }[]; pageErrors: string[]; consoleErrors: string[]; notes: string[] }) {
+  console.log(`${r.outcome}  ${r.project.name ?? r.project.path}  (${r.release}, ${(r.durationMs / 1000).toFixed(1)}s${r.via === "daemon" ? `, daemon ${r.tab}` : ""})`);
+  if (r.error) console.log(`  error: ${r.error}`);
   for (const n of r.notes) console.log(`  note: ${n}`);
   if (r.startupPageErrors.length) console.log(`  editor startup: ${r.startupPageErrors.length} page error(s) before the open (not counted), first: ${r.startupPageErrors[0].split("\n")[0]}`);
   for (const d of r.dialogs) console.log(`  dialog ${d.id}${d.langKey ? ` [${d.langKey}]` : ""}: ${d.title} — ${d.body.replace(/\s+/g, " ").slice(0, 160)}`);

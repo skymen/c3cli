@@ -11,6 +11,19 @@ c3cli preview <folder|.c3p> [--seconds 10]                # open, preview, colle
 c3cli export  <folder|.c3p> --to <new .zip|new folder>    # Web (HTML5) export [--minify --lossless --lossy --[no-]offline]
 ```
 
+Daemon: keep warm editor tabs running so commands skip the browser and editor startup
+(about 2.5 s per open instead of 5.5 s) and several projects can run at once:
+
+```sh
+c3cli daemon start --tabs 3 [--profile dir]   # background; log in ~/.config/c3cli/daemon.log
+c3cli open game.c3p                            # uses the daemon automatically (--no-daemon to skip)
+c3cli daemon status
+c3cli daemon stop
+```
+
+Library (`import { C3Editor } from "c3cli"`): open, save, export, and drive live previews
+(run code on the runtime, input, waitFor, screenshots). See [tasks/library.md](tasks/library.md).
+
 Accounts (email/username + password only, no OAuth):
 
 ```sh

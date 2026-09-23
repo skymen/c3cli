@@ -1,4 +1,5 @@
 // Web (HTML5) export through the editor's own export wizard, captured as a download.
+import { writeFile } from "node:fs/promises";
 import type { Page } from "playwright";
 import { dismissDialogs, clickProjectMenuItem } from "./editor.ts";
 
@@ -23,6 +24,29 @@ export interface ExportResult {
   reportText: string | null;
   dialogs: { id: string; text: string }[];
   error?: string;
+}
+
+const CHUNK = 8 * 1024 * 1024;
+
+// Fetch a blob: URL inside the page and copy it out in base64 chunks.
+async function readBlob(page: Page, href: string): Promise<Buffer> {
+  const size = await page.evaluate(async (href) => {
+    const buf = await (await fetch(href)).arrayBuffer();
+    (window as any).__c3cliBlob = new Uint8Array(buf);
+    return buf.byteLength;
+  }, href);
+  const parts: Buffer[] = [];
+  for (let at = 0; at < size; at += CHUNK) {
+    const b64 = await page.evaluate(({ at, n }) => {
+      const bytes: Uint8Array = (window as any).__c3cliBlob.subarray(at, at + n);
+      let bin = "";
+      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      return btoa(bin);
+    }, { at, n: CHUNK });
+    parts.push(Buffer.from(b64, "base64"));
+  }
+  await page.evaluate(() => { delete (window as any).__c3cliBlob; });
+  return Buffer.concat(parts);
 }
 
 const EXPORT_TITLE = "Export the project for publishing to a platform.";
@@ -78,12 +102,14 @@ export async function exportWeb(page: Page, opts: ExportOptions, zipPath: string
     if (done !== "webExportReportDialog") return { ...r, error: `export stopped at dialog ${done}` };
     r.reportText = (await openDialogs()).find((x) => x.id === done)?.text ?? null;
 
-    const dlP = page.waitForEvent("download", { timeout: 15_000 });
-    await page.click("#webExportReportDialog a.downloadExportedProject");
-    const dl = await dlP;
-    await dl.saveAs(zipPath);
+    // The download link is a blob: URL. Read it from the page directly instead of going
+    // through a download, which also works when the page is driven over CDP (daemon).
+    const link = page.locator("#webExportReportDialog a.downloadExportedProject");
+    const [href, name] = await Promise.all([link.getAttribute("href"), link.getAttribute("download")]);
+    if (!href) return { ...r, error: "the export report has no download link" };
+    await writeFile(zipPath, await readBlob(page, href));
     await page.click("#webExportReportDialog .okButton").catch(() => {});
-    return { ...r, outcome: "exported", zipPath, suggestedName: dl.suggestedFilename() };
+    return { ...r, outcome: "exported", zipPath, suggestedName: name };
   } catch (e) {
     r.dialogs.push(...(await openDialogs().catch(() => [])));
     return { ...r, error: (e as Error).message.split("\n")[0] };

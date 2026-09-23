@@ -34,20 +34,29 @@ const MENU_TITLES = {
 
 const STAGE_BATCH_BYTES = 8 * 1024 * 1024;
 
-export interface Session { context: BrowserContext; page: Page; close(): Promise<void> }
+export interface Session { context: BrowserContext; page: Page; cdpUrl: string | null; close(): Promise<void> }
 
 // Without `profile`, each run gets a fresh temporary profile that is deleted on close:
 // no leftover addons, recovery prompts or settings between runs.
-export async function launch(opts: { profile?: string; headed: boolean }): Promise<Session> {
+// With `cdp`, Chromium also listens on a random local DevTools port so other processes
+// (daemon clients) can drive its pages; the URL is read from DevToolsActivePort.
+export async function launch(opts: { profile?: string; headed: boolean; cdp?: boolean }): Promise<Session> {
   const temp = opts.profile ? null : await mkdtemp(path.join(os.tmpdir(), "c3cli-profile-"));
-  const context = await chromium.launchPersistentContext(opts.profile ?? temp!, {
+  const userDataDir = opts.profile ?? temp!;
+  const context = await chromium.launchPersistentContext(userDataDir, {
     headless: !opts.headed,
     viewport: { width: 1400, height: 900 },
+    args: opts.cdp ? ["--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1"] : [],
   });
   await context.addInitScript(PICKER_SHIM);
   const page = context.pages()[0] ?? (await context.newPage());
+  let cdpUrl: string | null = null;
+  if (opts.cdp) {
+    const [port] = (await readFile(path.join(userDataDir, "DevToolsActivePort"), "utf8")).split("\n");
+    cdpUrl = `http://127.0.0.1:${port.trim()}`;
+  }
   return {
-    context, page,
+    context, page, cdpUrl,
     close: async () => {
       await context.close();
       if (temp) await rm(temp, { recursive: true, force: true });
@@ -81,8 +90,8 @@ export async function dismissDialogs(page: Page): Promise<string[]> {
 // Copy the project into OPFS under c3cli/<runId> and arm the picker shim with its handle.
 export async function stageProject(page: Page, project: ProjectInfo, runId: string): Promise<number> {
   await page.evaluate(async (runId) => {
+    // OPFS is shared by every tab on the origin: only ever touch this run's folder.
     const root = await navigator.storage.getDirectory();
-    await root.removeEntry("c3cli", { recursive: true }).catch(() => {});
     const runs = await root.getDirectoryHandle("c3cli", { create: true });
     (window as any).__c3cliRun = await runs.getDirectoryHandle(runId, { create: true });
   }, runId);
@@ -121,6 +130,22 @@ export async function stageProject(page: Page, project: ProjectInfo, runId: stri
     w.__c3cliPick = kind === "folder" ? w.__c3cliRun : await w.__c3cliRun.getFileHandle(name);
   }, { kind: project.kind, name: path.basename(project.path) });
   return files.length;
+}
+
+export async function removeStaged(page: Page, runId: string): Promise<void> {
+  await page.evaluate(async (runId) => {
+    const root = await navigator.storage.getDirectory();
+    const runs = await root.getDirectoryHandle("c3cli", { create: true });
+    await runs.removeEntry(runId, { recursive: true }).catch(() => {});
+  }, runId).catch(() => {});
+}
+
+// Remove every staged run. Only safe when no tab is using one (pool startup).
+export async function clearStaging(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    await root.removeEntry("c3cli", { recursive: true }).catch(() => {});
+  }).catch(() => {});
 }
 
 // Click Menu → Project → <item>, the item picked by its title attribute.
