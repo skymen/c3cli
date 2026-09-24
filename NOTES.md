@@ -33,7 +33,6 @@ limits · `[internal]` calling editor internals, demangling · `[cli]` command s
 
 - [cli] `c3cli eval <js>` against the editor page for ad-hoc experiments; `c3cli screenshot`
 - [cli] Scripted edits ("open, rename object type X, save") for generating merge fixtures inside the real editor — only if the internal API turns out stable enough
-- [docs] README, and a "how the editor loads a project" write-up from what the lab finds
 
 ## Ideas
 
