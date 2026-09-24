@@ -154,10 +154,10 @@ aren't supported.
 `whoami` shows the account and edition a profile is logged in with. It exits 0 when logged
 in, and 2 for a guest.
 
-With a `.env` file that isn't committed:
+With the credentials in a `.env` file that isn't committed:
 
 ```sh
-node --env-file=.env bin/c3cli.js login --profile ~/.config/c3cli/me
+node --env-file=.env "$(which c3cli)" login --profile ~/.config/c3cli/me
 ```
 
 ## Exit codes

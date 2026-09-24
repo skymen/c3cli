@@ -1,5 +1,10 @@
 # Node library
 
+```sh
+npm install c3cli
+npx playwright install chromium   # once, for the browser
+```
+
 ```ts
 import { C3Editor } from "c3cli";
 ```

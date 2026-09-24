@@ -1,16 +1,41 @@
 {
   "name": "c3cli",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0",
+  "description": "Drive the Construct 3 editor from the command line and from Node: open, save, preview and export projects, and get a verdict back",
+  "keywords": [
+    "construct3",
+    "construct-3",
+    "c3",
+    "playwright",
+    "cli",
+    "automation",
+    "game-development"
+  ],
+  "author": "skymen",
+  "license": "MIT",
   "type": "module",
   "bin": {
-    "c3cli": "./bin/c3cli.js"
+    "c3cli": "bin/c3cli.js"
   },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "bin",
+    "docs"
+  ],
   "scripts": {
     "build": "tsc",
     "c3cli": "tsx src/cli.ts",
     "spike": "tsx",
-    "test": "node --import tsx --test test/*.test.ts"
+    "test": "node --import tsx --test test/*.test.ts",
+    "prepublishOnly": "npm test && npm run build"
   },
   "engines": {
     "node": ">=22"
@@ -25,13 +50,5 @@
     "@types/yauzl": "^3.4.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
-  },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    }
   }
 }

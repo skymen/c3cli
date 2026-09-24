@@ -23,18 +23,15 @@ missing-addons  New project  (r495-2, 1.7s)
 
 ## Install
 
-You need Node 22+. c3cli isn't on npm yet, so install it from a checkout:
+You need Node 22+.
 
 ```sh
-git clone <c3cli repository> c3cli
-cd c3cli
-npm install
-npx playwright install chromium   # the browser c3cli drives
-npm run build
-npm link                          # puts `c3cli` on your PATH
+npm install -g c3cli
+npx playwright install chromium   # the browser c3cli drives, once
 ```
 
-Or run it from source without building: `npx tsx src/cli.ts open game.c3p`.
+Or without a global install: `npx c3cli open game.c3p` (Chromium is still needed). For the
+Node library, run `npm install c3cli` in your project.
 
 ## Use
 
@@ -136,7 +133,12 @@ See [docs/library.md](docs/library.md).
 ## Development
 
 ```sh
+git clone <this repository> && cd c3cli
+npm install
+npx playwright install chromium
 npm test                           # unit tests (pure logic, no browser)
+npm run build
+npx tsx src/cli.ts open game.c3p   # run from source without building
 npx tsx scripts/sweep.ts <label>   # open every fixture, write a table to reports/
 ```
 
