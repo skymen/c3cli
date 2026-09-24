@@ -1,12 +1,12 @@
 # Node library
 
 ```sh
-npm install c3cli
+npm install @skymen75/c3cli
 npx playwright install chromium   # once, for the browser
 ```
 
 ```ts
-import { C3Editor } from "c3cli";
+import { C3Editor } from "@skymen75/c3cli";
 ```
 
 The CLI is built on this API, so it gives the same results, plus live previews you can

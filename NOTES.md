@@ -14,7 +14,7 @@ limits · `[internal]` calling editor internals, demangling · `[cli]` command s
 
 ## Now
 
-- [cli] Publish 0.1.0 to npm: ready (`npm publish`, after `npm login`). c3merge waits for it: its devDependency moves from `file:../c3cli` to the npm version
+- [cli] Publish `@skymen75/c3cli` 0.1.0 to npm: ready (`npm publish`). npm refused the unscoped `c3cli` as too similar to `cli`; the command is still `c3cli`. c3merge waits for it: its devDependency moves from `file:../c3cli` to the npm version
 - [open] Opening a folder that is a git repo root stages its whole `.git` directory (428 MB for Under The Red Sky) and the page dies ("Target page, context or browser has been closed"). Skip `.git` (and other non-project dirs) when staging. Found via c3merge `scripts/replay-merge.ts` (2026-09-23)
 
 ## Normal

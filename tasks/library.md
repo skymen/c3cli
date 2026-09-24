@@ -6,7 +6,7 @@
 merging is plain JSON, and c3cli is only for its tests (skymen, 2026-09-23).
 
 ```ts
-import { C3Editor } from "c3cli";
+import { C3Editor } from "@skymen75/c3cli";
 
 const editor = await C3Editor.connect();            // daemon's warm tabs
 // or: await C3Editor.launch({ tabs: 2, profile, headed, warm: { branch: "stable" } })

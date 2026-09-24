@@ -1,5 +1,5 @@
 {
-  "name": "c3cli",
+  "name": "@skymen75/c3cli",
   "version": "0.1.0",
   "description": "Drive the Construct 3 editor from the command line and from Node: open, save, preview and export projects, and get a verdict back",
   "keywords": [
@@ -13,6 +13,9 @@
   ],
   "author": "skymen",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "bin": {
     "c3cli": "bin/c3cli.js"

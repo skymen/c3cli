@@ -26,12 +26,12 @@ missing-addons  New project  (r495-2, 1.7s)
 You need Node 22+.
 
 ```sh
-npm install -g c3cli
+npm install -g @skymen75/c3cli
 npx playwright install chromium   # the browser c3cli drives, once
 ```
 
-Or without a global install: `npx c3cli open game.c3p` (Chromium is still needed). For the
-Node library, run `npm install c3cli` in your project.
+Or without a global install: `npx @skymen75/c3cli open game.c3p` (Chromium is still needed). For the
+Node library, run `npm install @skymen75/c3cli` in your project.
 
 ## Use
 
@@ -105,7 +105,7 @@ account for automation: anything that runs c3cli can read the password while it 
 ## Library
 
 ```ts
-import { C3Editor } from "c3cli";
+import { C3Editor } from "@skymen75/c3cli";
 
 const editor = await C3Editor.launch();              // or C3Editor.connect() to use the daemon
 const project = await editor.open("game.c3p");
