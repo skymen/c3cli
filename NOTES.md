@@ -25,6 +25,7 @@ limits · `[internal]` calling editor internals, demangling · `[cli]` command s
 - [observe] Report contract v1 exists (`--report json`); still missing `repaired`. Sort which save diffs are canonicalisation and which are real changes ([tasks/observe.md](tasks/observe.md#report))
 - [open] Staging is one `evaluate` per ~8 MB batch of base64; measure on big projects (backupadam has 1918 files) and consider `page.route` streaming
 - [cli] Menu items are found by English `title` text; find a language-independent handle (lang keys are available, see observe.md)
+- [save] `saveAs` flakes with several tabs: the menu click times out while a `#progressDialog` still covers the page, or `page.evaluate` fails with "NotFoundError: A requested file or directory could not be found". Wait for the progress dialog to close before clicking; retry once. Seen in c3merge's lab (2 of 126 saves, r495-2, 3 tabs) and uid experiment (4 tabs) (2026-09-25)
 
 ## Later
 
