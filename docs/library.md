@@ -21,6 +21,8 @@ const editor = await C3Editor.launch({
   profile: "/Users/me/.c3cli-profile", // keep logins; default: a fresh temporary profile
   headed: false,
   warm: { branch: "stable" },         // load this release in the tabs up front
+  locale: "en-US",                    // the browser's language (default); a fresh profile's
+                                      // editor takes it, and c3cli works in any of C3's languages
 });
 
 // Or borrow tabs from a running daemon (`c3cli daemon start`). Throws if it isn't running.
@@ -36,6 +38,7 @@ const project = await editor.open("game.c3p", {
   branch: "lts",                // or release: "r449-5"
   useProjectRelease: true,      // exactly the release it was saved with
   installBundledAddons: true,   // default
+  addons: ["~/addons"],         // install these unbundled addons first (.c3addon, folders, zips)
   timeoutMs: 60_000,
 });
 
@@ -52,13 +55,33 @@ Several `open` calls can run at once, one per tab. Extra calls wait for a free t
 ## Save and export
 
 ```ts
-await project.save("out/");              // Ctrl+S, written to a new folder (or a new .c3p), diffed with the input
+await project.save();                    // Ctrl+S, in place: rewrites the project's own files
+await project.save("out/");              // Ctrl+S into a new folder (or a new .c3p), diffed with the input
 await project.saveAs("full/");           // "Save as project folder": every file from the editor's memory
+await project.saveAs("full.c3p");        // "Save as single file"
 await project.export("game.zip", { minify: "none", offline: true });   // or a new folder
 ```
 
 `save` only rewrites what C3 considers changed. `saveAs` writes everything C3 holds, so
-use it to see the project the way C3 sees it. None of them overwrite an existing target.
+use it to see the project the way C3 sees it. After `saveAs`, the project lives at the new
+place (`project.path`), and `save()` writes there. None of them overwrite an existing
+target. Outside these calls the editor can't write the project: its own saves fail, unless
+you call `project.allowEditorSaves()` (what `--keep-open` does).
+
+## New projects and addons
+
+```ts
+// Project → New with the release's defaults, saved to a new folder or .c3p, left open.
+const project = await editor.create("games/pong", { branch: "beta", name: "Pong" });
+project.saved;                           // what was written
+
+// Install addons into the editor's browser profile, then reload its tabs.
+const results = await editor.installAddons(["~/addons/barrel_zoom.c3addon"]);
+// → [{ file, id, name, version, type, outcome: "installed" | "updated" | "refused" | "unknown", message? }]
+```
+
+Addons last as long as the profile: for good with `profile`, until `close()` with a
+temporary one, and in the daemon's profile with `C3Editor.connect()`.
 
 ## Live previews
 
@@ -109,5 +132,5 @@ Use them for anything the API doesn't cover.
 - `REPORT_VERSION`
 - `resolveRelease({ branch | release })`: the exact release a branch points to now
 - `daemonStatus()`, `isDaemonRunning()`, `DEFAULT_SOCKET`
-- The types: `OpenReport`, `OpenOptions`, `LaunchOptions`, `SaveReport`,
-  `ExportReport`, `ExportOptions`, `PreviewResult`, `Branch`, `Release`
+- The types: `OpenReport`, `OpenOptions`, `LaunchOptions`, `CreateOptions`, `SaveReport`,
+  `ExportReport`, `ExportOptions`, `AddonResult`, `PreviewResult`, `Branch`, `Release`

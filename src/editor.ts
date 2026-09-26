@@ -1,38 +1,16 @@
-// Drive the hosted editor: launch a browser profile, stage a project in OPFS, and
-// open it through the editor's own "Open local file/folder" menu items with the pickers
-// shimmed to return the staged handle (see tasks/open-project.md).
+// Drive the hosted editor: launch a browser profile, load a release, click through its menus,
+// and save with it. Projects get into the editor by dropping their real path on it, and the
+// editor writes them back through the bridge (src/bridge.ts, tasks/open-project.md).
 import { chromium, type BrowserContext, type Page } from "playwright";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Release } from "./release.ts";
-import type { ProjectInfo } from "./project.ts";
+import { BRIDGE_SCRIPT, type Bridge, type Root } from "./bridge.ts";
 
 // Thrown when the requested release doesn't exist: a usage error, not an editor failure.
 export class ReleaseNotFound extends Error {}
 
-// A string, not a function: tsx/esbuild's keepNames wraps named functions in __name(),
-// which doesn't exist in the page. The first line also defines it, as a no-op, for every
-// page.evaluate that declares a named helper.
-const PICKER_SHIM = `
-  globalThis.__name = (fn) => fn;
-  window.__c3cliPick = null;
-  const take = () => {
-    const h = window.__c3cliPick;
-    window.__c3cliPick = null;
-    if (!h) throw new DOMException("The user aborted a request.", "AbortError");
-    return h;
-  };
-  window.showDirectoryPicker = async () => take();
-  window.showOpenFilePicker = async () => [take()];
-`;
-
-const MENU_TITLES = {
-  folder: "Choose a folder-based project on this device to open.",
-  file: "Choose a file on this device to open.",
-};
-
-const STAGE_BATCH_BYTES = 8 * 1024 * 1024;
 
 export interface Session { context: BrowserContext; page: Page; cdpUrl: string | null; close(): Promise<void> }
 
@@ -40,15 +18,18 @@ export interface Session { context: BrowserContext; page: Page; cdpUrl: string |
 // no leftover addons, recovery prompts or settings between runs.
 // With `cdp`, Chromium also listens on a random local DevTools port so other processes
 // (daemon clients) can drive its pages; the URL is read from DevToolsActivePort.
-export async function launch(opts: { profile?: string; headed: boolean; cdp?: boolean }): Promise<Session> {
+export async function launch(opts: { profile?: string; headed: boolean; cdp?: boolean; locale?: string }): Promise<Session> {
   const temp = opts.profile ? null : await mkdtemp(path.join(os.tmpdir(), "c3cli-profile-"));
   const userDataDir = opts.profile ?? temp!;
   const context = await chromium.launchPersistentContext(userDataDir, {
     headless: !opts.headed,
     viewport: { width: 1400, height: 900 },
+    // A fresh profile takes the editor's language from the browser's; a profile where
+    // someone picked a language in C3's settings keeps it.
+    locale: opts.locale ?? "en-US",
     args: opts.cdp ? ["--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1"] : [],
   });
-  await context.addInitScript(PICKER_SHIM);
+  await context.addInitScript(BRIDGE_SCRIPT);
   const page = context.pages()[0] ?? (await context.newPage());
   let cdpUrl: string | null = null;
   if (opts.cdp) {
@@ -87,69 +68,23 @@ export async function dismissDialogs(page: Page): Promise<string[]> {
   return dismissed;
 }
 
-// Copy the project into OPFS under c3cli/<runId> and arm the picker shim with its handle.
-export async function stageProject(page: Page, project: ProjectInfo, runId: string): Promise<number> {
-  await page.evaluate(async (runId) => {
-    // OPFS is shared by every tab on the origin: only ever touch this run's folder.
-    const root = await navigator.storage.getDirectory();
-    const runs = await root.getDirectoryHandle("c3cli", { create: true });
-    (window as any).__c3cliRun = await runs.getDirectoryHandle(runId, { create: true });
-  }, runId);
-
-  const files = project.kind === "folder"
-    ? (await listFiles(project.path)).map((rel) => ({ rel, abs: path.join(project.path, rel) }))
-    : [{ rel: path.basename(project.path), abs: project.path }];
-
-  let batch: { rel: string; b64: string }[] = [];
-  let batchBytes = 0;
-  const flush = async () => {
-    if (!batch.length) return;
-    await page.evaluate(async (batch) => {
-      for (const { rel, b64 } of batch) {
-        let dir: FileSystemDirectoryHandle = (window as any).__c3cliRun;
-        const parts = rel.split("/");
-        for (const p of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(p, { create: true });
-        const w = await (await dir.getFileHandle(parts.at(-1)!, { create: true })).createWritable();
-        await w.write(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)));
-        await w.close();
-      }
-    }, batch);
-    batch = [];
-    batchBytes = 0;
-  };
-  for (const f of files) {
-    const buf = await readFile(f.abs);
-    batch.push({ rel: f.rel.split(path.sep).join("/"), b64: buf.toString("base64") });
-    batchBytes += buf.length;
-    if (batchBytes >= STAGE_BATCH_BYTES) await flush();
-  }
-  await flush();
-
-  await page.evaluate(async ({ kind, name }) => {
-    const w = window as any;
-    w.__c3cliPick = kind === "folder" ? w.__c3cliRun : await w.__c3cliRun.getFileHandle(name);
-  }, { kind: project.kind, name: path.basename(project.path) });
-  return files.length;
+// The progress dialog covers the page while the editor works (saving, loading); a menu
+// click during it times out.
+async function waitForProgress(page: Page, timeoutMs = 60_000) {
+  await page.waitForFunction(() => !document.querySelector("#progressDialog[open]"), null, { timeout: timeoutMs, polling: 250 }).catch(() => {});
 }
 
-export async function removeStaged(page: Page, runId: string): Promise<void> {
-  await page.evaluate(async (runId) => {
-    const root = await navigator.storage.getDirectory();
-    const runs = await root.getDirectoryHandle("c3cli", { create: true });
-    await runs.removeEntry(runId, { recursive: true }).catch(() => {});
-  }, runId).catch(() => {});
-}
-
-// Remove every staged run. Only safe when no tab is using one (pool startup).
-export async function clearStaging(page: Page): Promise<void> {
-  await page.evaluate(async () => {
-    const root = await navigator.storage.getDirectory();
-    await root.removeEntry("c3cli", { recursive: true }).catch(() => {});
-  }).catch(() => {});
+// Click Menu → <item>, a top-level item picked by its title attribute (Settings…).
+export async function clickMainMenuItem(page: Page, title: string): Promise<void> {
+  await waitForProgress(page);
+  await page.click("#mainMenuButton");
+  await page.waitForTimeout(300);
+  await page.locator(`ui-menuitem[title="${title}"]`).click();
 }
 
 // Click Menu → Project → <item>, the item picked by its title attribute.
 export async function clickProjectMenuItem(page: Page, title: string): Promise<void> {
+  await waitForProgress(page);
   await page.click("#mainMenuButton");
   await page.locator("ui-menuitem[sub-menu]").first().click();
   // The submenu animates in; a click during the animation is silently dropped.
@@ -159,6 +94,7 @@ export async function clickProjectMenuItem(page: Page, title: string): Promise<v
 
 // Click Menu → Project → <submenu> → <item>, the submenu by its label and the item by title.
 export async function clickProjectSubmenuItem(page: Page, submenu: string, title: string): Promise<void> {
+  await waitForProgress(page);
   await page.click("#mainMenuButton");
   await page.locator("ui-menuitem[sub-menu]").first().click();
   await page.waitForTimeout(500);
@@ -171,14 +107,6 @@ export async function clickProjectSubmenuItem(page: Page, submenu: string, title
   await page.locator(`ui-menuitem[title="${title}"]`).click();
 }
 
-// Click Menu → Project → Open local file/folder. Throws if the editor never asked for a picker.
-export async function clickOpen(page: Page, kind: ProjectInfo["kind"]): Promise<void> {
-  await clickProjectMenuItem(page, MENU_TITLES[kind]);
-  await page.waitForFunction(() => (window as any).__c3cliPick === null, null, { timeout: 5000 }).catch(() => {
-    throw new Error("the editor did not ask for a file/folder picker after clicking the open menu item (menu changed?)");
-  });
-}
-
 export async function listFiles(dir: string, base = dir): Promise<string[]> {
   const out: string[] = [];
   for (const e of await readdir(dir, { withFileTypes: true })) {
@@ -189,88 +117,58 @@ export async function listFiles(dir: string, base = dir): Promise<string[]> {
   return out;
 }
 
-// lastModified of every staged file, keyed by path relative to the staged project root.
-// `root` names the window global holding the folder handle (the staged project by default).
-export async function snapshotStaged(page: Page, root = "__c3cliRun"): Promise<Record<string, number>> {
-  return page.evaluate(async (root) => {
-    const out: Record<string, number> = {};
-    const walk = async (d: FileSystemDirectoryHandle, pre: string) => {
-      for await (const [name, h] of (d as any).entries()) {
-        if (h.kind === "directory") await walk(h, pre + name + "/");
-        else out[pre + name] = (await h.getFile()).lastModified;
-      }
-    };
-    await walk((window as any)[root], "");
-    return out;
-  }, root);
+// Menu → Project → New (`title` is its tooltip), then Create in the New project dialog with
+// C3's defaults and `name`. Resolves once the window title is one of `titles`.
+export async function newProjectInEditor(page: Page, title: string, name: string, titles: string[], timeoutMs: number): Promise<void> {
+  await dismissDialogs(page);
+  await clickProjectMenuItem(page, title);
+  await page.waitForSelector("#newProjectDialog[open]", { timeout: 10_000 });
+  await page.fill("#newProjectDialog #npProjectNameInput", name);
+  await page.click("#newProjectDialog .okButton");
+  await page.waitForFunction(({ titles, name }) => titles.includes(document.title) || document.title.startsWith(`${name} - Construct 3 `), { titles, name }, { timeout: timeoutMs })
+    .catch(() => { throw new Error(`the editor did not show the new project "${name}"`); });
 }
 
-// Trigger the editor's own save (Ctrl/Cmd+S). It writes through the handle it was given
-// at open time, i.e. into the staged OPFS copy. Resolves once writes stop for quietMs.
-export async function saveInEditor(page: Page, timeoutMs: number, quietMs = 1500): Promise<string[]> {
+// Trigger the editor's own save (Ctrl/Cmd+S). Where the writes land (in place, a mirror
+// copy) is set on the bridge beforehand. Resolves with the files written, once writes stop
+// for quietMs.
+export async function saveInEditor(page: Page, bridge: Bridge, timeoutMs: number, quietMs = 1500): Promise<string[]> {
   await dismissDialogs(page);
-  const before = await snapshotStaged(page);
+  const since = Date.now();
   await page.keyboard.press("ControlOrMeta+s");
-  const deadline = Date.now() + timeoutMs;
-  let last = before, lastChangeAt = 0;
-  while (Date.now() < deadline) {
-    await page.waitForTimeout(250);
-    const now = await snapshotStaged(page);
-    const moved = Object.keys(now).some((k) => now[k] !== last[k]) || Object.keys(last).some((k) => !(k in now));
-    if (moved) { last = now; lastChangeAt = Date.now(); }
-    else if (lastChangeAt && Date.now() - lastChangeAt >= quietMs) break;
+  if (!(await bridge.quiet(since, timeoutMs, quietMs))) {
+    const dialog = await openDialogText(page);
+    throw new Error(`the editor did not write anything after Ctrl/Cmd+S${dialog ? ` (${dialog})` : ""}`);
   }
-  if (!lastChangeAt) throw new Error("the editor did not write anything after Ctrl/Cmd+S");
-  return Object.keys(last).filter((k) => last[k] !== before[k]).sort();
+  return bridge.changedSince(since);
 }
 
-const SAVE_AS_FOLDER_TITLE = "Save the project to a folder.";
-
-// "Save as project folder" into a fresh, empty OPFS folder (c3cli/<runId>-saveas). Unlike
-// Ctrl+S, which only rewrites files C3 considers changed, this writes every file from what
-// the editor holds in memory. Resolves once writes stop for quietMs.
-export async function saveAsFolderInEditor(page: Page, runId: string, timeoutMs: number, quietMs = 1500): Promise<string[]> {
+// Menu → Project → Save as → <item>, answered with `target` (a new root caught by the
+// bridge). Unlike Ctrl+S, which only rewrites files C3 considers changed, this writes every
+// file from what the editor holds in memory. Afterwards the editor's project is `target`.
+// Resolves with the files written, once writes stop for quietMs.
+export async function saveAsInEditor(page: Page, bridge: Bridge, target: Root, menu: { submenu: string; title: string }, timeoutMs: number, quietMs = 1500): Promise<string[]> {
   await dismissDialogs(page);
-  await page.evaluate(async (name) => {
-    const root = await navigator.storage.getDirectory();
-    const runs = await root.getDirectoryHandle("c3cli", { create: true });
-    await runs.removeEntry(name, { recursive: true }).catch(() => {});
-    const w = window as any;
-    w.__c3cliSaveAs = await runs.getDirectoryHandle(name, { create: true });
-    w.__c3cliPick = w.__c3cliSaveAs;
-  }, `${runId}-saveas`);
-  await clickProjectSubmenuItem(page, "Save as", SAVE_AS_FOLDER_TITLE);
-  const deadline = Date.now() + timeoutMs;
-  let last: Record<string, number> = {}, lastChangeAt = 0;
-  while (Date.now() < deadline) {
-    await page.waitForTimeout(250);
-    // A fresh profile gets a "Set up backups" nag before the picker: "Save anyway".
-    await page.click("#confirmDialog[open] .cancelConfirmButton", { timeout: 200 }).catch(() => {});
-    const now = await snapshotStaged(page, "__c3cliSaveAs");
-    const moved = Object.keys(now).some((k) => now[k] !== last[k]) || Object.keys(last).some((k) => !(k in now));
-    if (moved) { last = now; lastChangeAt = Date.now(); }
-    else if (lastChangeAt && Date.now() - lastChangeAt >= quietMs) break;
+  const since = Date.now();
+  try {
+    await clickProjectSubmenuItem(page, menu.submenu, menu.title);
+  } catch {
+    // Once more, after whatever was in the way (seen with several tabs: a late dialog).
+    await dismissDialogs(page);
+    await clickProjectSubmenuItem(page, menu.submenu, menu.title);
   }
-  if (!lastChangeAt) throw new Error("the editor wrote nothing after Save as project folder");
-  return Object.keys(last).sort();
+  // A fresh profile gets a "Set up backups" nag before the picker: "Save anyway".
+  const nag = async () => { await page.click("#confirmDialog[open] .cancelConfirmButton", { timeout: 200 }).catch(() => {}); };
+  if (!(await bridge.quiet(since, timeoutMs, quietMs, nag))) {
+    const dialog = await openDialogText(page);
+    throw new Error(`the editor wrote nothing after Save as${dialog ? ` (${dialog})` : ""}`);
+  }
+  return bridge.changedSince(since, target);
 }
 
-// Copy the staged OPFS project out to disk, one file per evaluate to bound message size.
-export async function exportStaged(page: Page, outDir: string, root = "__c3cliRun"): Promise<number> {
-  const rels = Object.keys(await snapshotStaged(page, root));
-  for (const rel of rels) {
-    const b64: string = await page.evaluate(async ({ rel, root }) => {
-      let dir: FileSystemDirectoryHandle = (window as any)[root];
-      const parts = rel.split("/");
-      for (const p of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(p);
-      const bytes = new Uint8Array(await (await (await dir.getFileHandle(parts.at(-1)!)).getFile()).arrayBuffer());
-      let bin = "";
-      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-      return btoa(bin);
-    }, { rel, root });
-    const dest = path.join(outDir, ...rel.split("/"));
-    await mkdir(path.dirname(dest), { recursive: true });
-    await writeFile(dest, Buffer.from(b64, "base64"));
-  }
-  return rels.length;
+async function openDialogText(page: Page): Promise<string | null> {
+  return page.evaluate(() => {
+    const d = document.querySelector("dialog[open]:not(#progressDialog)") as HTMLElement | null;
+    return d ? `${d.id}: ${d.innerText.replace(/\s+/g, " ").trim().slice(0, 200)}` : null;
+  }).catch(() => null);
 }

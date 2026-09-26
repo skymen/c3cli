@@ -9,7 +9,7 @@ API). One long-lived browser context with a persistent profile under
 
 ```
 c3cli open   <project> [--release ...] [--report json] [--timeout 60]
-c3cli save   <project> --to <folder|.c3p>          # open + save-as + close
+c3cli save   <project> [--to <folder|.c3p>]        # open + Ctrl+S (in place, or into a copy) + close
 c3cli preview <project> [--layout X] [--seconds 10] # open + preview + collect console
 c3cli export <project> --format html5 --to out.zip
 c3cli daemon start|stop|status                       # keep an editor tab warm
@@ -53,6 +53,22 @@ saved with, and never lowers `savedWithRelease` to get past the editor's "saved 
 version" refusal. Going back a release can silently lose data; it stays a manual decision.
 `--use-project-release` opens with exactly the release the project was saved with (skymen,
 2026-09-23): older or newer than the default, never older than the project.
+
+## Open by drop, write through Node
+
+**(decided 2026-09-26)** Projects get into the editor by a browser-level drop of their real
+path (DevTools `Input.dispatchDragEvent`), not by copying them into the browser (OPFS). The
+editor's writes go to disk through a Node bridge that patches the File System Access API
+for dropped handles only; it refuses them outside c3cli's saves. `save` without `--to`
+saves in place; with `--to`, into a copy (skymen, 2026-09-26). Details in
+[tasks/open-project.md](tasks/open-project.md).
+
+## Any editor language
+
+**(decided 2026-09-26)** Every text c3cli clicks or reads is looked up by lang key in the
+release's lang file for the editor's current language, never hard-coded English. Fresh
+profiles run with the browser in en-US. Checked in every language the release offers
+(`scripts/check-languages.ts`) (skymen, 2026-09-26).
 
 ## Non-goals
 - Reimplementing the editor's project loader. That's what running the real editor is for.

@@ -7,6 +7,7 @@
 //   {id, op: "attachRuntime", tabId}     → {id, ok, realm: "page"|"worker"|null}
 //   {id, op: "evalRuntime", tabId, expr} → {id, ok, value}
 //     (a client's CDP connection doesn't see preview workers; the daemon's does)
+//   {id, op: "reloadTabs"}      → {id, ok}    (idle tabs reload, e.g. after installing addons)
 //   {id, op: "status"}          → {id, ok, pid, startedAt, profile, cdpUrl, tabs}
 //   {id, op: "stop"}            → {id, ok}    (then the daemon exits)
 // Clients drive a leased tab themselves over the Chrome DevTools protocol (cdpUrl), with the
@@ -77,6 +78,10 @@ export async function runDaemon(opts: DaemonOptions): Promise<void> {
         } else if (req.op === "done") {
           mine.delete(req.tabId!);
           await giveBack(req.tabId!);
+          reply({ id: req.id, ok: true });
+        } else if (req.op === "reloadTabs") {
+          log("reload idle tabs");
+          await pool.reloadIdle();
           reply({ id: req.id, ok: true });
         } else if (req.op === "attachRuntime") {
           reply({ id: req.id, ok: true, realm: await pool.attachRuntime(req.tabId!) });
@@ -253,6 +258,11 @@ export class DaemonSource implements TabSource {
       },
       done: async () => { await this.conn.request({ op: "done", tabId: r.tabId }, 30_000).catch(() => {}); },
     };
+  }
+
+  async reloadIdle() {
+    const r = await this.conn.request({ op: "reloadTabs" }, 30_000);
+    if (!r.ok) throw new Error(`daemon: ${r.error}`);
   }
 
   private async findTab(tabId: string): Promise<Page> {

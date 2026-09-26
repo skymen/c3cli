@@ -1,6 +1,8 @@
 # Node library
 
-**Status:** implemented (2026-09-23). `src/api.ts`, `src/preview.ts`, entry `src/index.ts`
+**Status:** implemented (2026-09-23); `create`, `installAddons`, `save()` in place,
+`saveAs` to a `.c3p`, `allowEditorSaves`, `LaunchOptions.locale` added 2026-09-26.
+`src/api.ts`, `src/preview.ts`, entry `src/index.ts`
 (built to `dist/index.js` with types). c3merge consumes it as a local path dev dependency
 (`"c3cli": "file:../c3cli"`); npm later. c3merge's final version must not depend on it:
 merging is plain JSON, and c3cli is only for its tests (skymen, 2026-09-23).

@@ -1,8 +1,8 @@
 # Commands
 
 Every command that opens a project takes a project **folder** (the folder holding
-`project.c3proj`) or a **`.c3p`** file. The input is never modified. c3cli copies the
-project into the browser, and the editor works on that copy.
+`project.c3proj`) or a **`.c3p`** file. c3cli drops it on the editor where it is: nothing is
+copied. The input is only ever written by `save` without `--to`.
 
 ## Options shared by open, save, preview and export
 
@@ -14,9 +14,10 @@ project into the browser, and the editor works on that copy.
 | `--report json` | | Print the [report](report.md) as JSON on stdout instead of the human summary |
 | `--timeout <seconds>` | 60 | Give up after this long |
 | `--headed` | off | Show the browser window |
-| `--keep-open` | off | Leave the editor open until you close the window (implies `--headed`) |
+| `--keep-open` | off | Leave the editor open until you close the window (implies `--headed`). Ctrl+S there saves the project in place. |
 | `--profile <dir>` | temporary | Use and keep this browser profile. Without it, each run gets a fresh profile, deleted afterwards. |
 | `--no-install-bundled-addons` | installs | Decline the editor's offer to install addons bundled in the project. The open then fails with `missing-addons`, naming them. |
+| `--addons <path>` | | Install these addons first: a `.c3addon`, a folder of them, or a zip. Repeatable. For projects that use addons they don't bundle. They stay in the browser profile: the daemon's when it's used, yours with `--profile`. See [addons install](#addons-install). |
 | `--no-daemon` | uses it | Don't use the [daemon](#daemon) even if it's running |
 
 **Release choice.** When the project was saved with a newer release than the one chosen,
@@ -51,27 +52,57 @@ Outcomes: `opened`, `missing-addons`, `refused-newer-release`, `refused-by-editi
 ## save
 
 ```sh
-c3cli save <project> --to <path> [options]
+c3cli save <project> [--to <path>] [options]
 ```
 
-Opens the project, saves it with the editor (Ctrl+S), and writes the result to `--to`: a
-new folder for a folder project, a new `.c3p` for a `.c3p`. It then lists which files differ
-from the input: changed, added and removed. Use it to see what C3 rewrites when a project
-passes through a given release.
+Opens the project and saves it with the editor (Ctrl+S).
+- **Without `--to`**, in place: the editor rewrites the project's own files, the ones it
+  considers changed, and c3cli lists them. A project saved with an older release gets
+  upgraded (`savedWithRelease` goes up, as it would in C3), never downgraded: the editor
+  refuses projects from newer releases.
+- **With `--to`**, the result goes to a new folder for a folder project (a copy of the
+  project without `.git`, with the save on top) or a new `.c3p` for a `.c3p`, and c3cli
+  lists which files differ from the input: changed, added and removed. The input isn't
+  touched. Use it to see what C3 rewrites when a project passes through a given release.
 
 ```
 $ c3cli save untitled --to saved
-opened  New project  (r495-2, 1.5s)
-  saved → /Users/me/saved: 5 file(s) differ from input (2 changed, 3 added, 0 removed)
+opened  New project  (r495-2, 1.0s)
+  saved → /Users/me/saved: 4 file(s) differ from input (2 changed, 2 added, 0 removed)
     ~ project.c3proj
     ~ project.uistate.json
     + .gitignore
     + llm-context.md
-    + models3d.uistate.json
+  savedWithRelease r432-2 → r495-2
+
+$ c3cli save untitled
+opened  New project  (r495-2, 1.1s)
+  saved in place: the editor wrote 7 file(s)
+    ~ .gitignore
+    ~ llm-context.md
+    …
+  savedWithRelease r432-2 → r495-2
 ```
 
 Ctrl+S on a folder project only rewrites the files C3 considers changed. To get every file
 as C3 holds it in memory, use `saveAs` in the [library](library.md).
+
+## new
+
+```sh
+c3cli new <new folder | new .c3p> [--name <name>] [--branch <b> | --release <r>] [--report json] [--timeout] [--headed] [--profile <dir>] [--no-daemon]
+```
+
+Creates a new project with the editor (Menu → Project → New, with the release's defaults)
+and saves it: a folder, or a `.c3p`. The project is named `--name`, or after the target
+(`games/pong` → "pong"). The result is exactly what that release writes for an empty
+project: a clean starting point for tools, templates and test fixtures. The target is never
+overwritten.
+
+```
+$ c3cli new pong --branch beta
+created  pong → /Users/me/pong  (r503, 23 file(s))
+```
 
 ## preview
 
@@ -118,6 +149,28 @@ On a guest or free account, export is refused (`refused-by-edition`, exit 2) whe
 
 Log in with [`c3cli login`](#login-and-whoami) and pass `--profile`.
 
+## addons install
+
+```sh
+c3cli addons install <paths...> [--profile <dir>] [--branch <b> | --release <r>] [--report json] [--timeout] [--headed] [--no-daemon]
+```
+
+Installs addons (`.c3addon` files, folders of them, zips) the way a user does: drops them on
+the editor, accepts each install prompt (and the update prompt for one already installed),
+then reloads. Addons live in the browser profile, so this installs into `--profile`, or into
+the running daemon's profile (its idle tabs reload). Without either it refuses: a temporary
+profile would lose them.
+
+```
+$ c3cli addons install ~/addons --profile ~/.config/c3cli/me
+installed skymen_barrelzoom 1.0.1.0  (barrel_zoom-1.0.1.0.c3addon)
+refused   skymen_parent_anchor 1.0.0.3  (better-anchor-1.0.0.3-stable.c3addon): The addon skymen_parent_anchor by skymen is a legacy (SDK v1) addon …
+```
+
+Each addon is `installed`, `updated`, `refused` (exit 2) or `unknown`, when the editor
+never answered about it (exit 3). On r449 LTS, SDK v1 addons get no answer in headless
+mode at all (NOTES.md).
+
 ## Daemon
 
 ```sh
@@ -136,7 +189,7 @@ asks for another one.
 
 - Socket: `~/.config/c3cli/daemon.sock`. Log: `~/.config/c3cli/daemon.log`.
 - An open takes about 2.5 s through the daemon, against 5.5 s on its own. Six projects on
-  three tabs take 10–11 s.
+  three tabs take 5–6 s.
 
 ## login and whoami
 
@@ -167,7 +220,7 @@ node --env-file=.env "$(which c3cli)" login --profile ~/.config/c3cli/me
 | 0 | Clean |
 | 1 | Opened with warnings: dialogs after opening (such as deprecated features), page errors, runtime errors during preview |
 | 2 | Refused: invalid project, newer release, missing addons, expression name collision, free-edition limit, login failed |
-| 3 | Crashed, timed out, editor error, or the requested preview, save or export didn't happen |
+| 3 | Crashed, timed out, editor error, or the requested preview, save, export or addon install didn't happen |
 | 4 | Tool error (bad arguments, `--to` already exists…) |
 
 Console noise the editor always prints doesn't affect the exit code. Examples are failed

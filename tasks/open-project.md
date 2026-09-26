@@ -1,11 +1,14 @@
 # Getting a project into the editor
 
-**Status:** re-decided (2026-09-26), not implemented yet: open by **dropping the real path**
-through CDP, no copy, and save **in place through a Node write bridge** (both below). OPFS is
-left only for "save as" to another place, if the bridge can't cover that too.
+**Status:** implemented (2026-09-26): open by **dropping the real path** through CDP, no
+copy, and write **through a Node bridge** (`src/bridge.ts`): in place, into a copy for
+`save --to`, or into a caught drop for "save as". No OPFS left anywhere. Checked on stable
+r495-2, beta r503 and LTS r449-5 (`scripts/check-open-save.ts`), through the daemon, and on
+the UTRS repo root (3.8 GB with `.git`/`tools/`): opens, twice on one editor, nothing written.
 Previously (2026-09-23): G, OPFS-backed picker shim, for both `.c3p` and folder projects.
 Spikes: `scripts/spike-opfs.ts`, `scripts/spike-menu.ts`, `scripts/spike-real-folder.ts`,
-`scripts/spike-drop-folder.ts`, `scripts/spike-write-perm.ts`, `scripts/spike-drop-write.ts`.
+`scripts/spike-drop-folder.ts`, `scripts/spike-write-perm.ts`, `scripts/spike-drop-write.ts`,
+`scripts/spike-capture.ts`, `scripts/spike-cdp-binding.ts`.
 
 ## Drop through CDP (2026-09-26, hosted r495-2, Playwright 1.63, headless)
 - `Input.dispatchDragEvent` (`dragEnter`, `dragOver`, `drop`) with
@@ -54,9 +57,37 @@ into IndexedDB and reads are untouched. Node refuses paths outside the dropped r
 - The bridge binding is per browser context: with several tabs, map each page to its root
   (the binding's `source.page`).
 
-## Still to check (drop and bridge)
-- LTS r449-5 and beta; drops while a daemon runs several tabs; the drop point
-  (700, 450 on a 1400×900 viewport) landing on the editor with the start page showing.
+## Implementation (2026-09-26)
+- **Roots.** Each dropped path is a root (an id in the page's `WeakMap` of handles). Node
+  decides per root where writes go: refused (default: C3 shows "Unable to save project",
+  nothing on disk changes), in place (`save` without `--to`, `--keep-open`), or a mirror.
+- **Mirror** (`save --to` on a folder): Node copies the project to the target (no `.git`,
+  `COPYFILE_FICLONE`), a caught drop of the copy gives the page a real handle to it, and
+  lookups (`getDirectoryHandle`, `getFileHandle`, `entries`…) resolve in the copy while it's
+  set. Needed because C3 creates new files and folders on save (`llm-context.md`,
+  `models3d`), which the original's read-only handles can't return. The input stays
+  byte-for-byte untouched. The diff then only compares the files C3 wrote.
+- **Caught drops** ("save as", `new`): a window capture-phase listener takes the drop
+  (`preventDefault` + `stopImmediatePropagation`) when c3cli arms it, so the editor never
+  sees it; the handle answers the next `showDirectoryPicker` / `showSaveFilePicker`. A
+  `.c3p` target is created empty first so it can be dropped. The editor's title and dialogs
+  don't change on a caught drop.
+- **Did the editor take the drop?** The patched `getAsFileSystemHandle` records the root it
+  tagged; c3cli fails after 5 s if the editor never asked for it.
+- **Writes** go to Node in 8 MB base64 chunks, into `<name>.c3cli-tmp`, renamed on the last.
+  `removeEntry` and `remove()` work (spike-capture).
+- **Daemon.** The daemon's context installs the init script at launch; the client adds the
+  `__c3cliFs` binding to its leased page over its own CDP connection, on an already loaded
+  page (spike-cdp-binding), so the client's process writes the files. No protocol change.
+- The drop point is the viewport's centre; it works with the start page showing, on all
+  three branches, and with 3 tabs at once.
+- Timings (r495-2): lab-base/untitled open in ~1 s; a folder with an extra 1 GB `tools/`
+  and a `.git` in 1 s; the daemon's 6 parallel opens on 3 tabs in 5.3 s (10–11 s with OPFS).
+  UTRS (LTS, with its bundled addons) takes 165 s, which is C3 loading it.
+- "A second `open()` on the same `C3Editor` fails" (c3merge's `replay-merge.ts`, UTRS
+  worktrees on LTS) doesn't reproduce: three opens on fixtures across releases, with the
+  OPFS code too, and two opens of the UTRS repo root with the drop, all fine. Probably the
+  OPFS copy of a big project.
 
 ## Findings (2026-09-23)
 - **B/C as written are dead.** In Playwright 1.63 the File System Access pickers never

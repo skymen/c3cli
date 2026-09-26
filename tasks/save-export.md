@@ -1,9 +1,25 @@
 # Save / export
 
 **Status:** `c3cli save` implemented for same-format save-back (2026-09-23): folder → folder,
-`.c3p` → `.c3p`. `c3cli export` implemented for Web (HTML5) (2026-09-23). Other platforms
-are not started. Format conversion (folder ↔ `.c3p`) is dropped (skymen, 2026-09-26): it's
+`.c3p` → `.c3p`; in place without `--to`, and through the write bridge instead of OPFS
+(2026-09-26, skymen chose "no `--to` means in place"). `saveAs` takes a folder or a `.c3p`;
+`c3cli new` creates a project and saves it (2026-09-26). `c3cli export` implemented for Web
+(HTML5) (2026-09-23), and works on r449 LTS, which has no zip/folder choice (always a zip).
+Other platforms are not started. Format conversion (folder ↔ `.c3p`) is dropped (skymen, 2026-09-26): it's
 zipping/unzipping, no editor needed.
+
+## Since 2026-09-26
+The OPFS sections below are history: saves now go through `src/bridge.ts`
+(open-project.md). `saveAs` uses a caught drop of the target, not an OPFS folder. The
+`saveAs` flake with several tabs (NotFoundError from OPFS, or a menu click under
+`#progressDialog`) is gone: no OPFS, menu clicks wait for the progress dialog, and the Save
+as click is retried once. `scripts/check-saveas.ts`: 40 open + saveAs on 3 tabs, 0 failures.
+
+## New project (2026-09-26)
+Menu → Project → New (`main-menu.project-menu.new-tooltip`) → `#newProjectDialog`: name in
+`#npProjectNameInput`, then `.okButton` (Create). The rest keeps C3's defaults (preset
+`sd-landscape-16-9`, 854×480, landscape, event sheet). Then Save as. Works on stable, beta
+and LTS; the result reopens with `savedWithRelease` = the release.
 
 ## Save as project folder (2026-09-23)
 `project.saveAs(to)` (library only) uses Menu → Project → Save as → "Save as project

@@ -4,8 +4,7 @@
 import { EventEmitter } from "node:events";
 import type { Page, Worker } from "playwright";
 import { clickProjectMenuItem, dismissDialogs } from "./editor.ts";
-
-const PROJECT_PREVIEW_TITLE = "Run a preview of the current project.";
+import { editorText, type EditorText } from "./lang.ts";
 
 // Evaluated as a string in the preview page and its workers (workers don't get the
 // __name shim). The runtime instance is private, but it calls C3.Runtime.prototype.Tick
@@ -94,13 +93,14 @@ export class LivePreview extends EventEmitter<PreviewEvents> {
   // Start a preview from an editor page with a project open. Without `layout`: the whole
   // project (Menu → Preview, from its first layout). With `layout`: make that layout active
   // and "Preview layout" (F5), so the runtime starts directly on it.
-  static async start(editor: Page, opts: { layout?: string; remote?: RemoteRuntime } = {}): Promise<LivePreview> {
+  static async start(editor: Page, opts: { layout?: string; remote?: RemoteRuntime; text?: EditorText } = {}): Promise<LivePreview> {
+    const ui = opts.text ?? (await editorText(editor));
     await dismissDialogs(editor);
     if (opts.layout) await activateLayout(editor, opts.layout);
     // The editor's own popup, not any new window (other tabs may be previewing too).
     const popupP = editor.waitForEvent("popup", { timeout: 20_000 });
     if (opts.layout) await editor.keyboard.press("F5");
-    else await clickProjectMenuItem(editor, PROJECT_PREVIEW_TITLE);
+    else await clickProjectMenuItem(editor, ui.t("main-menu.project-menu.preview-tooltip"));
     // If the editor can't build the preview it shows a dialog instead ("Failed to start
     // preview"): report that right away rather than waiting out the popup timeout.
     const refusedP = editor.waitForFunction(() => {
@@ -189,13 +189,13 @@ export interface PreviewResult {
 
 // One-shot preview for the CLI: start, record which layout the runtime is on, collect
 // output for `seconds`, close.
-export async function runPreview(editor: Page, opts: { seconds: number; layout?: string; remote?: RemoteRuntime }): Promise<PreviewResult> {
+export async function runPreview(editor: Page, opts: { seconds: number; layout?: string; remote?: RemoteRuntime; text?: EditorText }): Promise<PreviewResult> {
   const r: PreviewResult = {
     started: false, url: null, seconds: opts.seconds, requestedLayout: opts.layout ?? null,
     startLayout: null, runtimeIn: null, log: [], consoleErrors: [], pageErrors: [],
   };
   let p: LivePreview;
-  try { p = await LivePreview.start(editor, { layout: opts.layout, remote: opts.remote }); }
+  try { p = await LivePreview.start(editor, { layout: opts.layout, remote: opts.remote, text: opts.text }); }
   catch (e) { return { ...r, error: (e as Error).message }; }
   r.url = p.window.url();
   const t0 = Date.now();

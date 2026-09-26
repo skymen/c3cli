@@ -3,11 +3,11 @@
 import { Command, Option } from "commander";
 import { createInterface } from "node:readline/promises";
 import path from "node:path";
-import { C3Editor, REPORT_VERSION, checkTarget, resolveRelease, type ExportReport, type SaveReport } from "./api.ts";
+import { C3Editor, REPORT_VERSION, checkTarget, resolveRelease, type AddonResult, type ExportReport, type SaveReport } from "./api.ts";
 import { DEFAULT_SOCKET, DaemonSource, daemonStatus, runDaemon, startDaemon, stopDaemon } from "./daemon.ts";
-import type { SaveDiff } from "./diff.ts";
 import { launch, loadEditor } from "./editor.ts";
 import { LOSSLESS_FORMATS, LOSSY_FORMATS, MINIFY_MODES, type ExportOptions } from "./export.ts";
+import { editorText } from "./lang.ts";
 import { isLoggedIn, logIn, waitForAccount } from "./login.ts";
 import type { Outcome } from "./observe.ts";
 import type { PreviewResult } from "./preview.ts";
@@ -26,8 +26,11 @@ interface OpenOpts {
   profile?: string;
   keepOpen: boolean;
   installBundledAddons: boolean;
+  addons: string[];
   daemon: boolean;
 }
+
+const collect = (v: string, prev: string[]) => [...prev, v];
 
 const program = new Command("c3cli").description("Drive the Construct 3 editor from the command line");
 
@@ -43,6 +46,7 @@ function withOpenOptions(cmd: Command): Command {
   .option("--headed", "show the browser window", false)
   .option("--profile <dir>", "use (and keep) this browser profile; default: a fresh temporary profile per run")
   .option("--no-install-bundled-addons", "decline the editor's prompt to install addons bundled in the project")
+  .option("--addons <path>", "install these addons first (.c3addon, a folder of them, or a zip; repeatable); they stay in the profile (the daemon's, with the daemon)", collect, [])
   .option("--keep-open", "leave the editor open until the window is closed (implies --headed)", false)
   .option("--no-daemon", "use a private browser even if the daemon is running");
 }
@@ -77,11 +81,45 @@ withOpenOptions(program.command("export").description("Open a project and export
     kind: "export", to: opts.to, options: { minify: opts.minify, lossless: opts.lossless, lossy: opts.lossy, offline: opts.offline },
   })));
 
-withOpenOptions(program.command("save").description("Open a project, save it with the editor, write the result to --to and diff it against the input"))
-  .requiredOption("--to <path>", "where to write the saved project: a new folder for folder projects, a new .c3p for .c3p projects (never overwritten)")
-  .action((projectPath: string, opts: OpenOpts & { to: string }) => guarded(opts, () => runCommand(projectPath, opts, { kind: "save", to: opts.to })));
+withOpenOptions(program.command("save").description("Open a project and save it with the editor (Ctrl+S): in place, or into --to and diffed with the input"))
+  .option("--to <path>", "write the saved project here instead of over the input: a new folder for folder projects, a new .c3p for .c3p projects (never overwritten)")
+  .action((projectPath: string, opts: OpenOpts & { to?: string }) => guarded(opts, () => runCommand(projectPath, opts, { kind: "save", to: opts.to })));
 
-type Then = { kind: "save"; to: string } | { kind: "preview"; seconds: number; layout?: string } | { kind: "export"; to: string; options: ExportOptions };
+interface NewOpts { name?: string; branch: Branch; release?: string; report?: "json"; timeout: number; headed: boolean; profile?: string; daemon: boolean }
+
+program.command("new").description("Create a new project with the editor (Project → New, the release's defaults) and save it: a scaffold")
+  .argument("<path>", "a new or empty folder, or a new .c3p (never overwritten)")
+  .option("--name <name>", "the project's name (default: the folder or file name)")
+  .addOption(new Option("--branch <branch>", "editor branch").choices(["stable", "beta", "lts"]).default("stable"))
+  .option("--release <rNNN>", "exact editor release, e.g. r497 or r495-2 (overrides --branch)")
+  .addOption(new Option("--report <format>", "machine-readable report on stdout").choices(["json"]))
+  .option("--timeout <seconds>", "give up after this long", (v) => Number(v), 60)
+  .option("--headed", "show the browser window", false)
+  .option("--profile <dir>", "use (and keep) this browser profile; default: a fresh temporary profile per run")
+  .option("--no-daemon", "use a private browser even if the daemon is running")
+  .action((to: string, opts: NewOpts) => guarded(opts as unknown as OpenOpts, () => newCommand(to, opts)));
+
+async function newCommand(to: string, opts: NewOpts): Promise<number> {
+  const release = await resolveRelease(opts);
+  const started = Date.now();
+  const { editor, via } = await getEditor({ ...opts, keepOpen: false } as unknown as OpenOpts);
+  try {
+    const project = await editor.create(to, { release: release.name, name: opts.name, timeoutMs: opts.timeout * 1000 });
+    const saved = project.saved!;
+    await project.close();
+    const report = {
+      version: REPORT_VERSION, outcome: "created", to: saved.to, kind: project.info.kind, name: project.info.name,
+      release: release.name, savedWithRelease: saved.savedWithRelease?.after ?? null, files: saved.written, via, totalMs: Date.now() - started,
+    };
+    if (opts.report === "json") console.log(JSON.stringify(report, null, 2));
+    else console.log(`created  ${report.name} → ${report.to}  (${release.name}, ${saved.written.length} file(s)${via === "daemon" ? ", daemon" : ""})`);
+    return EXIT.clean;
+  } finally {
+    await editor.close();
+  }
+}
+
+type Then = { kind: "save"; to?: string } | { kind: "preview"; seconds: number; layout?: string } | { kind: "export"; to: string; options: ExportOptions };
 
 interface AccountOpts { profile: string; branch: Branch; release?: string; timeout: number; headed: boolean; report?: "json" }
 
@@ -100,6 +138,38 @@ withAccountOptions(program.command("login").description("Log in with username/em
 
 withAccountOptions(program.command("whoami").description("Show which account the editor is logged in to with --profile"))
   .action((opts: AccountOpts) => guarded(opts as OpenOpts, () => whoamiCommand(opts)));
+
+const addonsCmd = program.command("addons").description("Manage the addons installed in a browser profile");
+
+interface AddonsOpts { profile?: string; branch: Branch; release?: string; report?: "json"; timeout: number; headed: boolean; daemon: boolean }
+
+addonsCmd.command("install").description("Install addons into a browser profile (--profile) or the running daemon's, the way a user does: drop, confirm, reload")
+  .argument("<paths...>", ".c3addon files, folders of them, or zips")
+  .option("--profile <dir>", "the browser profile to install into (default: the running daemon's)")
+  .addOption(new Option("--branch <branch>", "editor branch to install with").choices(["stable", "beta", "lts"]).default("stable"))
+  .option("--release <rNNN>", "exact editor release to install with (overrides --branch)")
+  .addOption(new Option("--report <format>", "machine-readable report on stdout").choices(["json"]))
+  .option("--timeout <seconds>", "give up after this long", (v) => Number(v), 60)
+  .option("--headed", "show the browser window", false)
+  .option("--no-daemon", "don't use the running daemon (then --profile is required)")
+  .action((paths: string[], opts: AddonsOpts) => guarded(opts as unknown as OpenOpts, async () => {
+    const release = await resolveRelease(opts);
+    // A temporary profile would lose them on exit: a real profile, or the daemon's.
+    const source = !opts.profile && opts.daemon && !opts.headed ? await DaemonSource.connect().catch(() => null) : null;
+    if (!source && !opts.profile) throw new Error("addons live in the browser profile: pass --profile <dir>, or start the daemon to install into its profile");
+    const editor = source ? C3Editor.fromSource(source) : await C3Editor.launch({ profile: opts.profile, headed: opts.headed });
+    try {
+      const results = await editor.installAddons(paths, { release: release.name, timeoutMs: opts.timeout * 1000 });
+      const into = source ? "daemon" : path.resolve(opts.profile!);
+      if (opts.report === "json") console.log(JSON.stringify({ version: REPORT_VERSION, release: release.name, into, addons: results }, null, 2));
+      else for (const a of results) console.log(`${a.outcome.padEnd(9)} ${a.id ?? "?"} ${a.version ?? ""}  (${path.basename(a.file)})${a.message ? `: ${a.message}` : ""}`);
+      if (results.some((a) => a.outcome === "unknown")) return EXIT.crashed;
+      // updated counts as installed: the given file is what's installed now.
+      return results.some((a) => a.outcome === "refused") ? EXIT.refused : EXIT.clean;
+    } finally {
+      await editor.close();
+    }
+  }));
 
 const daemon = program.command("daemon").description("Keep a warm editor running in the background, shared by every c3cli command");
 
@@ -163,7 +233,7 @@ async function loginCommand(opts: AccountOpts): Promise<number> {
   const session = await launch({ profile: opts.profile, headed: opts.headed });
   try {
     await loadEditor(session.page, release, opts.timeout * 1000);
-    const r = await logIn(session.page, username, password, opts.timeout * 1000);
+    const r = await logIn(session.page, username, password, opts.timeout * 1000, await editorText(session.page, release.assetUrl));
     const report = { version: REPORT_VERSION, release: release.name, profile: path.resolve(opts.profile), ...r };
     if (opts.report === "json") console.log(JSON.stringify(report, null, 2));
     else {
@@ -182,8 +252,8 @@ async function whoamiCommand(opts: AccountOpts): Promise<number> {
   const session = await launch({ profile: opts.profile, headed: opts.headed });
   try {
     await loadEditor(session.page, release, opts.timeout * 1000);
-    const account = await waitForAccount(session.page, 15_000);
-    if (opts.report === "json") console.log(JSON.stringify({ version: REPORT_VERSION, loggedIn: isLoggedIn(account), ...account }, null, 2));
+    const account = await waitForAccount(session.page, 15_000, await editorText(session.page, release.assetUrl));
+    if (opts.report === "json") console.log(JSON.stringify({ version: REPORT_VERSION, ...account }, null, 2));
     else console.log(isLoggedIn(account) ? `${account.name} (${account.edition} edition)` : "not logged in (guest, free edition)");
     return isLoggedIn(account) ? EXIT.clean : EXIT.refused;
   } finally {
@@ -231,7 +301,7 @@ function askHidden(question: string): Promise<string> {
 
 async function runCommand(projectPath: string, opts: OpenOpts, then?: Then): Promise<number> {
   const info = await readProjectInfo(projectPath);
-  if (then?.kind === "save") await checkTarget(then.to, info.kind);
+  if (then?.kind === "save" && then.to) await checkTarget(then.to, info.kind);
   if (then?.kind === "export") await checkTarget(then.to, then.to.toLowerCase().endsWith(".zip") ? "zip" : "folder");
   const notes: string[] = [];
   let release = await resolveRelease(opts);
@@ -243,6 +313,7 @@ async function runCommand(projectPath: string, opts: OpenOpts, then?: Then): Pro
   try {
     const project = await editor.open(projectPath, {
       release: release.name, installBundledAddons: opts.installBundledAddons, timeoutMs,
+      addons: opts.addons.length ? opts.addons : undefined,
     });
     try {
       const outcome = project.report.outcome;
@@ -252,7 +323,7 @@ async function runCommand(projectPath: string, opts: OpenOpts, then?: Then): Pro
       let save: SaveReport | undefined;
       if (then?.kind === "save") {
         save = opened ? await project.save(then.to, { timeoutMs: Math.max(10_000, timeoutMs / 2) })
-          : { to: path.resolve(then.to), ok: false, written: [], diff: null, error: `not saved: ${notOpened}` };
+          : { to: path.resolve(then.to ?? projectPath), inPlace: !then.to, ok: false, written: [], savedWithRelease: null, diff: null, error: `not saved: ${notOpened}` };
       }
       let preview: PreviewResult | undefined;
       if (then?.kind === "preview") {
@@ -277,7 +348,12 @@ async function runCommand(projectPath: string, opts: OpenOpts, then?: Then): Pro
       if (opts.report === "json") console.log(JSON.stringify(report, null, 2));
       else printHuman(report);
 
-      if (opts.keepOpen && opened) await project.page.waitForEvent("close", { timeout: 0 });
+      if (opts.keepOpen && opened) {
+        // Whoever is at the window is driving now: their Ctrl+S saves in place.
+        project.allowEditorSaves();
+        console.error(`c3cli: the editor stays open; Ctrl+S there saves to ${project.path}`);
+        await project.page.waitForEvent("close", { timeout: 0 });
+      }
       if (outcome === "editor-error") return EXIT.crashed;
       const noisy = report.dialogs.length + report.pageErrors.length > 0;
       if (exported) {
@@ -345,12 +421,13 @@ function exitCode(outcome: Outcome, hadNoise: boolean): number {
   }
 }
 
-function printHuman(r: { via?: string; tab?: string; error?: string; export?: { outcome: string; to: string; files: number | null; reportText: string | null; dialogs: { id: string; text: string }[]; error?: string }; startupPageErrors: string[]; preview?: PreviewResult; save?: { to: string; ok: boolean; written: string[]; diff: SaveDiff | null; error?: string }; outcome: string; project: { name: string | null; path: string }; release: string; durationMs: number; dialogs: { id: string; langKey: string | null; title: string; body: string }[]; missingAddons: { type: string; id: string }[]; bundledAddons: { name: string | null; version: string | null; installed: boolean }[]; pageErrors: string[]; consoleErrors: string[]; notes: string[] }) {
+function printHuman(r: { addons?: AddonResult[]; via?: string; tab?: string; error?: string; export?: { outcome: string; to: string; files: number | null; reportText: string | null; dialogs: { id: string; text: string }[]; error?: string }; startupPageErrors: string[]; preview?: PreviewResult; save?: SaveReport; outcome: string; project: { name: string | null; path: string }; release: string; durationMs: number; dialogs: { id: string; langKey: string | null; title: string; body: string }[]; missingAddons: { type: string; id: string }[]; bundledAddons: { name: string | null; version: string | null; installed: boolean }[]; pageErrors: string[]; consoleErrors: string[]; notes: string[] }) {
   console.log(`${r.outcome}  ${r.project.name ?? r.project.path}  (${r.release}, ${(r.durationMs / 1000).toFixed(1)}s${r.via === "daemon" ? `, daemon ${r.tab}` : ""})`);
   if (r.error) console.log(`  error: ${r.error}`);
   for (const n of r.notes) console.log(`  note: ${n}`);
   if (r.startupPageErrors.length) console.log(`  editor startup: ${r.startupPageErrors.length} page error(s) before the open (not counted), first: ${r.startupPageErrors[0].split("\n")[0]}`);
   for (const d of r.dialogs) console.log(`  dialog ${d.id}${d.langKey ? ` [${d.langKey}]` : ""}: ${d.title} — ${d.body.replace(/\s+/g, " ").slice(0, 160)}`);
+  for (const a of r.addons ?? []) console.log(`  addon ${a.id ?? "?"} ${a.version ?? ""} (${path.basename(a.file)}): ${a.outcome}${a.message ? ` — ${a.message.slice(0, 160)}` : ""}`);
   for (const a of r.bundledAddons) console.log(`  bundled addon ${a.name ?? "?"} ${a.version ?? ""}: ${a.installed ? "installed" : "declined"}`);
   if (r.missingAddons.length) console.log(`  missing: ${r.missingAddons.map((a) => `${a.type.toLowerCase()} ${a.id}`).join(", ")}`);
   if (r.pageErrors.length) console.log(`  ${r.pageErrors.length} page error(s), first: ${r.pageErrors[0].split("\n")[0]}`);
@@ -367,12 +444,20 @@ function printHuman(r: { via?: string; tab?: string; error?: string; export?: { 
     else console.log(`  export ${x.outcome}${x.error ? `: ${x.error}` : ""}`);
     for (const d of x.dialogs) console.log(`    dialog ${d.id}: ${d.text.replace(/\s+/g, " ").slice(0, 200)}`);
   }
-  if (r.save?.ok && r.save.diff) {
-    const d = r.save.diff;
-    console.log(`  saved → ${r.save.to}: ${d.filesChanged} file(s) differ from input (${d.changed.length} changed, ${d.added.length} added, ${d.removed.length} removed)`);
-    for (const f of d.changed) console.log(`    ~ ${f}`);
-    for (const f of d.added) console.log(`    + ${f}`);
-    for (const f of d.removed) console.log(`    - ${f}`);
+  if (r.save?.ok) {
+    const s = r.save;
+    if (s.inPlace) {
+      console.log(`  saved in place: the editor wrote ${s.written.length} file(s)`);
+      for (const f of s.written) console.log(`    ~ ${f}`);
+    } else if (s.diff) {
+      const d = s.diff;
+      console.log(`  saved → ${s.to}: ${d.filesChanged} file(s) differ from input (${d.changed.length} changed, ${d.added.length} added, ${d.removed.length} removed)`);
+      for (const f of d.changed) console.log(`    ~ ${f}`);
+      for (const f of d.added) console.log(`    + ${f}`);
+      for (const f of d.removed) console.log(`    - ${f}`);
+    }
+    const w = s.savedWithRelease;
+    if (w && w.before !== w.after) console.log(`  savedWithRelease ${w.before ?? "?"} → ${w.after ?? "?"}`);
   } else if (r.save) console.log(`  save failed: ${r.save.error}`);
 }
 

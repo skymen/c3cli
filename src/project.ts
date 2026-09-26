@@ -8,6 +8,8 @@ export interface ProjectInfo {
   kind: "folder" | "file";
   name: string | null;
   savedWithRelease: number | null;
+  // Addon id → type, from the project's usedAddons.
+  addonTypes: Record<string, "Plugin" | "Behavior" | "Effect">;
 }
 
 export async function readProjectInfo(p: string): Promise<ProjectInfo> {
@@ -19,10 +21,15 @@ export async function readProjectInfo(p: string): Promise<ProjectInfo> {
   } catch { /* not a readable project; the editor will say so */ }
   let json: any = null;
   try { json = raw && JSON.parse(raw); } catch { /* ditto */ }
-  return { path: abs, kind, name: json?.name ?? null, savedWithRelease: json?.savedWithRelease ?? null };
+  const addonTypes: ProjectInfo["addonTypes"] = {};
+  for (const a of Array.isArray(json?.usedAddons) ? json.usedAddons : []) {
+    const type = { plugin: "Plugin", behavior: "Behavior", effect: "Effect" }[String(a?.type)] as ProjectInfo["addonTypes"][string] | undefined;
+    if (type && typeof a.id === "string") addonTypes[a.id] = type;
+  }
+  return { path: abs, kind, name: json?.name ?? null, savedWithRelease: json?.savedWithRelease ?? null, addonTypes };
 }
 
-function readZipEntry(zipPath: string, wanted: string): Promise<string | null> {
+export function readZipEntry(zipPath: string, wanted: string): Promise<string | null> {
   return new Promise((resolve, reject) => {
     yauzl.open(zipPath, { lazyEntries: true }, (err, zip) => {
       if (err) return reject(err);

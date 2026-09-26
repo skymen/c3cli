@@ -1,6 +1,12 @@
 # Observing what the editor did
 
-**Status:** implemented for `open` (2026-09-23), in `src/observe.ts` + `src/lang.ts`.
+**Status:** implemented for `open` (2026-09-23), in `src/observe.ts` + `src/lang.ts`. Since
+2026-09-26 dialogs are matched in the editor's own language (lang file for `<html lang>`,
+en-US for untranslated keys), and missing-addon lines are parsed with their own templates;
+the type comes from the project's `usedAddons` (zh-CN/zh-TW use one word for plugin and
+effect). The window title's product name is "Construct 3" wrapped in `ui.title-beta` /
+`ui.title-lts` on those branches: "{0} beta" in English, "beta {0}" in Italian (the only
+language that puts it first, r503 and r449-5), which made Italian beta opens time out.
 
 ## Findings (2026-09-23, hosted r495-2 and r497)
 - Every open outcome so far shows up as a `dialog[open]` with a stable, unmangled id:

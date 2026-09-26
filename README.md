@@ -5,9 +5,12 @@ It uses the real hosted editor (editor.construct.net) in a headless Chromium.
 
 - **open**: does this project open in C3, on this release? If not, why: missing addons, a
   newer release, invalid files, the free edition's limits.
-- **save**: open, save with the editor, and see which files C3 rewrote.
+- **save**: open and save with the editor, in place or into a copy, and see which files C3
+  rewrote.
+- **new**: create a new project with the editor, as a scaffold.
 - **preview**: run the project (or one layout) and collect runtime errors.
 - **export**: Web (HTML5) export to a zip or a folder.
+- **addons install** / `--addons`: install addons a project uses but doesn't bundle.
 - A **daemon** that keeps warm editor tabs, and a **Node library** to script previews
   (run code on the runtime, send input, take screenshots).
 
@@ -37,13 +40,17 @@ Node library, run `npm install @skymen75/c3cli` in your project.
 
 ```sh
 c3cli open    <folder|.c3p> [--report json]
-c3cli save    <folder|.c3p> --to <new folder|new .c3p>   # open, save with the editor, diff with the input
+c3cli save    <folder|.c3p>                                # open, save with the editor, in place
+c3cli save    <folder|.c3p> --to <new folder|new .c3p>   # open, save into a copy, diff with the input
 c3cli preview <folder|.c3p> [--seconds 10] [--layout "Level 1"]
 c3cli export  <folder|.c3p> --to <new .zip|new folder> [--minify none|bundle|simple|advanced] [--offline]
+c3cli new     <new folder|new .c3p> [--name "Pong"]
+c3cli addons install <.c3addon|folder|zip>... --profile <dir>   # or into the running daemon
 ```
 
-The input project is never modified, and `--to` never overwrites anything. Every command
-copies the project into the browser first.
+c3cli drops the project on the editor where it is, as you would from Finder: nothing is
+copied, so a project at the root of a big repo opens as fast as any other. Only `save`
+without `--to` writes to the project; `--to` never overwrites anything.
 
 Common options:
 
@@ -57,6 +64,7 @@ Common options:
 | `--headed` | Show the browser window; `--keep-open` leaves it open |
 | `--profile <dir>` | Use and keep this browser profile (logins live there); default: a fresh one per run |
 | `--no-install-bundled-addons` | Decline the editor's offer to install addons bundled in the project |
+| `--addons <path>` | Install these addons first (`.c3addon`, a folder of them, a zip) |
 
 A project saved with a newer release than the one chosen is refused by the editor. At a
 terminal, c3cli asks whether to switch to the project's release. c3cli never saves a
@@ -144,6 +152,8 @@ npx tsx scripts/sweep.ts <label>   # open every fixture, write a table to report
 
 `fixtures/` is gitignored. `scripts/unzip-fixtures.ts` makes the folder copies of the
 `.c3p` fixtures. `scripts/check-*.ts` exercise the library, the daemon and previews against
-the real editor, which needs a network connection.
+the real editor, which needs a network connection: `check-open-save.ts` (every way of
+saving, on stable, beta and LTS), `check-languages.ts` (every language the editor has),
+`check-saveas.ts` (many saves on several tabs), `check-parallel.ts` (the daemon).
 
 Tested on macOS only so far.

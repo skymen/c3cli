@@ -2,6 +2,7 @@
 import { writeFile } from "node:fs/promises";
 import type { Page } from "playwright";
 import { dismissDialogs, clickProjectMenuItem } from "./editor.ts";
+import { editorText, type EditorText } from "./lang.ts";
 
 export const MINIFY_MODES = ["none", "bundle", "simple", "advanced", "debug-advanced"] as const;
 export const LOSSLESS_FORMATS = ["png", "webp"] as const;
@@ -49,9 +50,7 @@ async function readBlob(page: Page, href: string): Promise<Buffer> {
   return Buffer.concat(parts);
 }
 
-const EXPORT_TITLE = "Export the project for publishing to a platform.";
-
-export async function exportWeb(page: Page, opts: ExportOptions, zipPath: string, timeoutMs: number): Promise<ExportResult> {
+export async function exportWeb(page: Page, opts: ExportOptions, zipPath: string, timeoutMs: number, text?: EditorText): Promise<ExportResult> {
   const r: ExportResult = { outcome: "export-failed", zipPath: null, suggestedName: null, reportText: null, dialogs: [] };
   const openDialogs = () => page.evaluate(() =>
     [...document.querySelectorAll("dialog[open]")].map((d) => ({ id: d.id, text: (d as HTMLElement).innerText.trim() })));
@@ -70,11 +69,12 @@ export async function exportWeb(page: Page, opts: ExportOptions, zipPath: string
   };
 
   try {
+    const ui = text ?? (await editorText(page));
     await dismissDialogs(page);
-    await clickProjectMenuItem(page, EXPORT_TITLE);
+    await clickProjectMenuItem(page, ui.t("main-menu.project-menu.export-tooltip"));
     await waitFor(["exportSelectPlatformDialog"], 10_000);
-    // Platform tiles carry no id or data attribute; the English label is the only handle.
-    await page.locator("#exportSelectPlatformDialog ui-iconviewitem", { hasText: "Web (HTML5)" }).first().click();
+    // Platform tiles carry no id or data attribute; the label is the only handle.
+    await page.locator("#exportSelectPlatformDialog ui-iconviewitem", { hasText: ui.t("exporters.html5.name") }).first().click();
     await page.click("#exportSelectPlatformDialog .nextButton");
 
     const next = await waitFor(["exportStandardOptionsDialog", "freeEditionLimitDialog"], 15_000);
@@ -86,7 +86,8 @@ export async function exportWeb(page: Page, opts: ExportOptions, zipPath: string
     if (next !== "exportStandardOptionsDialog") return { ...r, error: `unexpected dialog: ${next}` };
 
     const d = "#exportStandardOptionsDialog";
-    await page.selectOption(`${d} #exportTo`, "zip");
+    // r449 LTS has no zip/folder choice: it always exports a zip.
+    if (await page.locator(`${d} #exportTo`).count()) await page.selectOption(`${d} #exportTo`, "zip");
     if (opts.minify) await page.selectOption(`${d} #exportMinifyMode`, opts.minify);
     if (opts.lossless) await page.selectOption(`${d} #exportLosslessImageFormat`, opts.lossless);
     if (opts.lossy) await page.selectOption(`${d} #exportLossyImageFormat`, opts.lossy);

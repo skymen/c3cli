@@ -3,7 +3,7 @@
 // next lease never sees the previous project, its dialogs or its preview windows.
 // Used in-process by C3Editor.launch() and, behind a socket, by the daemon.
 import type { BrowserContext, Page } from "playwright";
-import { ReleaseNotFound, clearStaging, launch, loadEditor, type Session } from "./editor.ts";
+import { ReleaseNotFound, launch, loadEditor, type Session } from "./editor.ts";
 import type { Worker } from "playwright";
 import { captureRuntime, evalIn, type RemoteRuntime } from "./preview.ts";
 import type { Release } from "./release.ts";
@@ -25,6 +25,8 @@ export interface Lease {
 // Where leases come from: a local pool, or the daemon over its socket.
 export interface TabSource {
   lease(release: Release, timeoutMs: number): Promise<Lease>;
+  // Reload every idle tab (after installing addons). Leased tabs reload when they come back.
+  reloadIdle(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -43,6 +45,8 @@ interface Tab {
   ready: Promise<void>;
   loading: boolean;
   popups: Page[];
+  // The pool's generation when this tab's editor started loading (see reloadIdle).
+  generation: number;
 }
 
 export interface PoolOptions {
@@ -53,23 +57,24 @@ export interface PoolOptions {
   warm?: Release;
   cdp?: boolean;
   loadTimeoutMs?: number;
+  locale?: string;
 }
 
 export class LocalPool implements TabSource {
   private waiters: (() => void)[] = [];
   private closed = false;
+  // Bumped by reloadIdle(): a tab whose editor loaded before that reloads before its next lease.
+  private generation = 0;
 
   private constructor(readonly session: Session, private tabs: Tab[], private loadTimeoutMs: number) {}
 
   static async launch(opts: PoolOptions): Promise<LocalPool> {
-    const session = await launch({ profile: opts.profile, headed: opts.headed, cdp: opts.cdp });
+    const session = await launch({ profile: opts.profile, headed: opts.headed, cdp: opts.cdp, locale: opts.locale });
     const tabs: Tab[] = Array.from({ length: Math.max(1, opts.tabs) }, (_, i) => ({
-      id: `tab-${i + 1}`, page: null, release: null, busy: false, ready: Promise.resolve(), loading: false, popups: [],
+      id: `tab-${i + 1}`, page: null, release: null, busy: false, ready: Promise.resolve(), loading: false, popups: [], generation: 0,
       startup: { dialogs: [], pageErrors: [], consoleErrors: [] },
     }));
     const pool = new LocalPool(session, tabs, opts.loadTimeoutMs ?? 60_000);
-    // Leftover staged projects from a crashed run: safe to clear, nothing is leased yet.
-    await clearStaging(session.page);
     tabs[0].page = session.page;
     if (opts.warm) {
       for (const tab of tabs) tab.ready = pool.load(tab, opts.warm).catch(() => {});
@@ -88,7 +93,7 @@ export class LocalPool implements TabSource {
     const tab = await this.acquire(timeoutMs);
     try {
       await tab.ready;
-      if (!tab.page || tab.page.isClosed() || tab.release?.name !== release.name) await this.load(tab, release);
+      if (!tab.page || tab.page.isClosed() || tab.release?.name !== release.name || tab.generation !== this.generation) await this.load(tab, release);
     } catch (e) {
       this.free(tab, true);
       throw e;
@@ -121,6 +126,18 @@ export class LocalPool implements TabSource {
     const r = this.runtimes.get(tabId);
     if (!r || r.window.isClosed()) throw new Error("no attached preview runtime for this tab");
     return evalIn(r.realm, expr);
+  }
+
+  // Addons are read when the editor starts, so after an install every tab needs a reload:
+  // idle ones now, in the background; the others (busy, or already reloading) before their
+  // next lease.
+  async reloadIdle() {
+    this.generation++;
+    for (const tab of this.tabs) {
+      if (tab.busy || tab.loading || !tab.page) continue;
+      tab.busy = true;
+      this.free(tab, true);
+    }
   }
 
   async close() {
@@ -165,6 +182,7 @@ export class LocalPool implements TabSource {
 
   // Put a fresh page in the tab (unless it has an unused one) and load the editor in it.
   private async load(tab: Tab, release: Release) {
+    const generation = this.generation;
     if (!tab.page || tab.page.isClosed()) tab.page = await this.session.context.newPage();
     const page = tab.page;
     tab.release = null;
@@ -187,5 +205,6 @@ export class LocalPool implements TabSource {
     await page.evaluate((id) => { (window as any).__c3cliTabId = id; }, tab.id);
     tab.release = release;
     tab.startup = startup;
+    tab.generation = generation;
   }
 }

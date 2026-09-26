@@ -1,6 +1,8 @@
 # CLI surface
 
-**Status:** `open` implemented (2026-09-23, `src/cli.ts`). Daemon not started.
+**Status:** `open`, `save`, `preview`, `export`, `login`, `whoami`, `daemon` implemented
+(2026-09-23, `src/cli.ts`); `new`, `addons install`, `--addons`, and `save` without `--to`
+(in place) added 2026-09-26.
 
 Release selection (skymen, 2026-09-23): stable by default; `--branch stable|beta|lts`;
 `--release rNNN` exact. If the project was saved with a newer release, ask at a TTY

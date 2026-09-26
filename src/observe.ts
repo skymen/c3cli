@@ -1,7 +1,7 @@
 // Watch the editor after an open: collect console/page errors and dialogs, and decide the
 // outcome from layered signals (dialog DOM, window title), never from timing alone.
 import type { Page } from "playwright";
-import { matchLangKey, loadLang } from "./lang.ts";
+import { editorText, fillTemplate, isProjectTitle, matchLangKey, productNames, type EditorText, type Template } from "./lang.ts";
 
 export type Outcome =
   | "opened"
@@ -63,37 +63,54 @@ function worst(dialogs: DialogInfo[]): Outcome {
 }
 
 // Whole text first; then line by line, for dialogs that append data (addon lists) to a template.
-function dialogLangKey(lang: Awaited<ReturnType<typeof loadLang>>, d: Omit<DialogInfo, "langKey">): string | null {
+function dialogLangKey(lang: Template[], d: Omit<DialogInfo, "langKey">): string | null {
   const lines = d.body.split("\n");
   return matchLangKey(lang, `${d.title} ${d.body}`) ?? matchLangKey(lang, d.body)
     ?? lines.map((l) => matchLangKey(lang, l)).find(Boolean) ?? null;
 }
 
-// Lines after the header look like "Effect Foil Effect (dumivid_HolographicFoil) by dumivid".
-export function parseMissingAddons(dialogs: DialogInfo[]): MissingAddon[] {
+// Lines after the header come from the lang templates
+// ui.dialogs.missingAddons.missing-<type>-format, in English "Effect [b]{0}[/b] ({1}) by [i]{2}[/i]":
+// "Effect Foil Effect (dumivid_HolographicFoil) by dumivid". `type` is always the English
+// Plugin/Behavior/Effect, whatever the editor's language.
+export function parseMissingAddons(dialogs: DialogInfo[], text: EditorText | null = null): MissingAddon[] {
   const d = dialogs.find((x) => x.id === "missingAddonsDialog");
   if (!d) return [];
-  return d.body.split("\n").slice(1).flatMap((line) => {
-    const m = /^(\S+)\s+(.*?)\s+\(([^)]+)\)(?:\s+by\s+(.+))?$/.exec(line.trim());
-    return m ? [{ type: m[1], name: m[2], id: m[3], author: m[4] ?? null }] : [];
+  const formats = (["Plugin", "Behavior", "Effect"] as const).map((type) => ({
+    type,
+    template: text?.raw(`ui.dialogs.missingAddons.missing-${type.toLowerCase()}-format`) ?? `${type} [b]{0}[/b] ({1}) by [i]{2}[/i]`,
+  }));
+  return d.body.split("\n").slice(1).flatMap((line): MissingAddon[] => {
+    for (const f of formats) {
+      const v = fillTemplate(f.template, line);
+      if (v) return [{ type: f.type, name: v[0], id: v[1], author: v[2] || null }];
+    }
+    // No author, or a format c3cli doesn't know: the id in brackets is still there.
+    const m = /^(\S+)\s+(.*?)\s+\(([^)]+)\)/.exec(line.trim());
+    return m ? [{ type: m[1], name: m[2], id: m[3], author: null }] : [];
   });
 }
 
-// The install prompt lists "Name\nSSAOFOG\nVersion\n1.1.1\n…" under its header text.
-export function parseBundledAddon(body: string, installed: boolean): BundledAddon {
+// The install prompt lists "Name\nSSAOFOG\nVersion\n1.1.1\n…" under its header text, the
+// labels in the editor's language.
+export function parseBundledAddon(body: string, installed: boolean, text: EditorText | null = null): BundledAddon {
   const lines = body.split("\n");
-  const field = (label: string) => { const i = lines.indexOf(label); return i >= 0 ? lines[i + 1] ?? null : null; };
-  return { name: field("Name"), version: field("Version"), type: field("Type"), author: field("Author"), installed };
+  const field = (key: string, en: string) => {
+    const i = lines.indexOf(text?.raw(`ui.dialogs.addonConfirmInstall.${key}`) ?? en);
+    return i >= 0 ? lines[i + 1] ?? null : null;
+  };
+  return { name: field("name", "Name"), version: field("version", "Version"), type: field("type", "Type"), author: field("author", "Author"), installed };
 }
 
-export interface OpenResult { outcome: Outcome; dialogs: DialogInfo[]; bundledAddons: BundledAddon[]; title: string }
+export interface OpenResult { outcome: Outcome; dialogs: DialogInfo[]; missingAddons: MissingAddon[]; bundledAddons: BundledAddon[]; title: string; text: EditorText }
 
 // Poll until the project is open (title shows its name) or a dialog blocks the open.
 export async function waitForOutcome(page: Page, opts: {
   projectName: string | null; assetUrl: string; timeoutMs: number; settleMs?: number;
   installBundledAddons: boolean;
 }): Promise<OpenResult> {
-  const lang = await loadLang(opts.assetUrl);
+  const text = await editorText(page, opts.assetUrl);
+  const lang = text.templates;
   // Post-open dialogs (deprecated features) appear 25–45 ms after the title changes
   // (measured 2026-09-23); 500 ms leaves a >10× margin.
   const settleMs = opts.settleMs ?? 500;
@@ -107,17 +124,18 @@ export async function waitForOutcome(page: Page, opts: {
     }
     return { title: await page.title(), open: (await readDialogs(page)).length > 0 };
   };
-  // "<name> - Construct 3", with a suffix on some branches ("… - Construct 3 beta").
+  // "<name> - Construct 3", with the branch around it on beta and LTS ("… - Construct 3 beta",
+  // in Italian "… - beta Construct 3").
   const isOpened = (title: string) => opts.projectName
-    ? title === `${opts.projectName} - Construct 3` || title.startsWith(`${opts.projectName} - Construct 3 `)
-    : title !== startTitle && / - Construct 3( .*)?$/.test(title);
+    ? isProjectTitle(title, opts.projectName, text)
+    : title !== startTitle && (/ - Construct 3( .*)?$/.test(title) || productNames(text).some((p) => title.endsWith(` - ${p}`)));
 
   const bundledAddons: BundledAddon[] = [];
   // Projects can bundle .c3addon files; the editor asks to install each before loading.
   const answerAddonPrompt = async () => {
     const d = (await readDialogs(page)).find((x) => x.id === "addonConfirmInstallDialog");
     if (!d) return false;
-    bundledAddons.push(parseBundledAddon(d.body, opts.installBundledAddons));
+    bundledAddons.push(parseBundledAddon(d.body, opts.installBundledAddons, text));
     await page.click(`#addonConfirmInstallDialog ${opts.installBundledAddons ? ".okButton" : ".cancelButton"}`);
     await page.waitForFunction(() => !document.querySelector("#addonConfirmInstallDialog[open]"), null, { timeout: 5000 }).catch(() => {});
     return true;
@@ -131,16 +149,18 @@ export async function waitForOutcome(page: Page, opts: {
       // Let post-open dialogs (repairs, warnings) show up before reporting.
       await page.waitForTimeout(settleMs);
       const after = await snapshot();
-      return { outcome: "opened", dialogs: [...seen.values()], bundledAddons, title: after.title };
+      const dialogs = [...seen.values()];
+      return { outcome: "opened", dialogs, missingAddons: parseMissingAddons(dialogs, text), bundledAddons, title: after.title, text };
     }
     if (s.open) {
       blockedSince ??= Date.now();
       if (Date.now() - blockedSince >= 750) {
         const dialogs = [...seen.values()];
-        return { outcome: worst(dialogs), dialogs, bundledAddons, title: s.title };
+        return { outcome: worst(dialogs), dialogs, missingAddons: parseMissingAddons(dialogs, text), bundledAddons, title: s.title, text };
       }
     } else blockedSince = null;
     await page.waitForTimeout(250);
   }
-  return { outcome: "timeout", dialogs: [...seen.values()], bundledAddons, title: await page.title() };
+  const dialogs = [...seen.values()];
+  return { outcome: "timeout", dialogs, missingAddons: parseMissingAddons(dialogs, text), bundledAddons, title: await page.title(), text };
 }

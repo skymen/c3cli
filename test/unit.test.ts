@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { exactRelease, releaseName, releaseNum } from "../src/release.ts";
-import { buildTemplates, matchLangKey } from "../src/lang.ts";
+import { buildTemplates, fillTemplate, isProjectTitle, makeText, matchLangKey } from "../src/lang.ts";
 import { parseBundledAddon, parseMissingAddons } from "../src/observe.ts";
 
 test("release names and numbers round-trip", () => {
@@ -48,4 +48,56 @@ test("missing addons are parsed from the dialog body", () => {
 test("bundled addon prompt fields are parsed", () => {
   const body = "Only install addons from sources you trust.\nWould you like to install the following addon?\nName\nSSAOFOG\nVersion\n1.1.1\nType\nEffect\nAuthor\nMikal, FedericoCalchera\nWebsite\nhttps://www.construct.net";
   assert.deepEqual(parseBundledAddon(body, true), { name: "SSAOFOG", version: "1.1.1", type: "Effect", author: "Mikal, FedericoCalchera", installed: true });
+});
+
+// The editor in French: the same dialogs, parsed with the French lang file (r495-2 strings),
+// falling back to English for keys it doesn't translate.
+const fr = makeText([{
+  "ui": { "dialogs": {
+    "missingAddons": {
+      "missing-plugin-format": "Plugin [b]{0}[/b] ({1}) par [i]{2}[/i]",
+      "missing-behavior-format": "Comportement [b]{0}[/b] ({1}) par [i]{2}[/i]",
+      "missing-effect-format": "Effet [b]{0}[/b] ({1}) par [i]{2}[/i]",
+    },
+    "addonConfirmInstall": { "name": "Nom", "version": "Version", "type": "Type", "author": "Auteur" },
+  } },
+  "user-account": { "guest": "Invité" },
+}, {
+  "user-account": { "guest": "Guest", "waiting": "..." },
+  "main-menu": { "project-menu": { "save-as": "Save as" } },
+}], "fr-FR");
+
+test("lang lookups use the editor's language, then English", () => {
+  assert.equal(fr.t("user-account.guest"), "Invité");
+  assert.equal(fr.t("user-account.waiting"), "...");
+  assert.equal(fr.t("main-menu.project-menu.save-as"), "Save as");
+  assert.throws(() => fr.t("main-menu.no-such-key"), /no-such-key/);
+});
+
+test("templates fill their placeholders in order", () => {
+  assert.deepEqual(fillTemplate("Plugin [b]{0}[/b] ({1}) by [i]{2}[/i]", "Plugin Dedra SDK (skymen_dedra) by skymen"), ["Dedra SDK", "skymen_dedra", "skymen"]);
+  assert.deepEqual(fillTemplate("{1} ({0})", "b (a)"), ["a", "b"]);
+  assert.equal(fillTemplate("Plugin [b]{0}[/b] ({1}) by [i]{2}[/i]", "Behavior X (y) by z"), null);
+});
+
+test("missing addons and the install prompt are parsed in French", () => {
+  const dialogs = [{ id: "missingAddonsDialog", langKey: null, title: "Addons manquants", buttons: ["Fermer"],
+    body: "Le projet que vous ouvrez utilise…\nEffet Foil Effect (dumivid_HolographicFoil) par dumivid\nComportement Better Input (skymen_bim) par skymen" }];
+  assert.deepEqual(parseMissingAddons(dialogs, fr), [
+    { type: "Effect", name: "Foil Effect", id: "dumivid_HolographicFoil", author: "dumivid" },
+    { type: "Behavior", name: "Better Input", id: "skymen_bim", author: "skymen" },
+  ]);
+  const body = "N'installez des addons que de sources sûres.\nNom\nSSAOFOG\nVersion\n1.1.1\nType\nEffet\nAuteur\nMikal";
+  assert.deepEqual(parseBundledAddon(body, false, fr), { name: "SSAOFOG", version: "1.1.1", type: "Effet", author: "Mikal", installed: false });
+});
+
+test("window titles follow the language's branch wording", () => {
+  const en = makeText([{ ui: { "title-beta": "{0} beta", "title-lts": "{0} LTS" } }], "en-US");
+  const it = makeText([{ ui: { "title-beta": "beta {0}" } }, { ui: { "title-beta": "{0} beta", "title-lts": "{0} LTS" } }], "it-IT");
+  assert.ok(isProjectTitle("Pong - Construct 3", "Pong", en));
+  assert.ok(isProjectTitle("Pong - Construct 3 beta", "Pong", en));
+  assert.ok(isProjectTitle("Pong - Construct 3 LTS", "Pong", en));
+  assert.ok(isProjectTitle("Pong - beta Construct 3", "Pong", it));
+  assert.ok(!isProjectTitle("Pong - beta Construct 3", "Pong", en));
+  assert.ok(!isProjectTitle("Pongo - Construct 3", "Pong", en));
 });

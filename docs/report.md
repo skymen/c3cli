@@ -2,13 +2,14 @@
 
 `--report json` prints one JSON object on stdout and nothing else there. The release
 prompt, if any, goes to stderr. The library returns the same object as `project.report`.
-The format carries a `version` (currently 1).
+The format carries a `version` (currently 2: version 1 had `filesStaged`, from when
+projects were copied into the browser, and `save` had no `inPlace` or `savedWithRelease`).
 
 A real one, trimmed:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "project": {
     "path": "/Users/me/fixtures/better-shine-addon-bug.c3p",
     "kind": "file",
@@ -21,7 +22,6 @@ A real one, trimmed:
   "tab": "tab-1",
   "outcome": "missing-addons",
   "durationMs": 1518,
-  "filesStaged": 1,
   "startupDialogs": ["welcomeTourDialog"],
   "startupPageErrors": [],
   "startupConsoleErrors": ["Failed to load resource: the server responded with a status of 400 ()"],
@@ -56,13 +56,13 @@ A real one, trimmed:
 | `via` | `local` (a private browser) or `daemon` (CLI only) |
 | `outcome` | See below |
 | `error` | The reason, when the outcome is `editor-error` |
-| `durationMs` | From clicking Open to the outcome |
+| `durationMs` | From dropping the project on the editor to the outcome |
 | `totalMs` | The whole command, including browser startup (CLI only) |
-| `filesStaged` | Files copied into the browser |
 | `startupDialogs`, `startupPageErrors`, `startupConsoleErrors` | What happened while the editor itself loaded, before the project. Not counted against the project. |
-| `dialogs` | Every dialog shown during and right after the open: `id`, `title`, `body`, `buttons`, and the `langKey` its text matches in the release's language file |
+| `dialogs` | Every dialog shown during and right after the open: `id`, `title`, `body`, `buttons` (in the editor's language), and the `langKey` its text matches in the release's language files |
 | `missingAddons` | `{ type, name, id, author }` for each addon the editor says is missing; `declined: true` when it was bundled and `--no-install-bundled-addons` declined it |
 | `bundledAddons` | Addons the project bundles and the editor offered to install: `{ name, version, type, author, installed }` |
+| `addons` | With `--addons` only: each file given, `{ file, id, name, version, type, outcome, message?, langKey? }`, `outcome` being `installed`, `updated`, `refused` or `unknown` |
 | `log` | Console messages, as `[type] text` |
 | `consoleErrors`, `pageErrors` | Console errors and uncaught exceptions after the open started |
 
@@ -81,13 +81,21 @@ A real one, trimmed:
 | `tool-error` | 4 | c3cli failed. Only `version`, `outcome` and `error` are set. |
 
 The outcome comes from what the editor shows (dialogs and the window title), never from
-timing alone. Dialogs are identified by element id and lang key, not by English text.
+timing alone. Dialogs are identified by element id and lang key, not by their text, which
+is in the editor's language.
+
+## `new`
+
+`c3cli new --report json` prints its own, smaller object: `{ version, outcome: "created",
+to, kind, name, release, savedWithRelease, files, via, totalMs }`, `files` being what the
+editor wrote. Failures are a `tool-error`.
 
 ## Added by save, preview and export
 
-**`save`**: `{ to, ok, written, diff: { filesChanged, changed[], added[], removed[] }, error? }`.
-`written` lists the files the editor wrote during the save. `diff` compares the result with
-the input, file by file. `.c3p` files are unzipped for the comparison.
+**`save`**: `{ to, inPlace, ok, written, savedWithRelease: { before, after }, diff: { filesChanged, changed[], added[], removed[] }, error? }`.
+`written` lists the files the editor wrote (or created or deleted) during the save.
+`inPlace` is true without `--to`; `diff` is then null. With `--to`, `diff` compares the
+result with the input, file by file. `.c3p` files are unzipped for the comparison.
 
 **`preview`**:
 - `started`: whether the runtime started;
