@@ -1,11 +1,12 @@
 // Install addons (.c3addon files) that a project uses but doesn't bundle, the way a user
-// does: drop them on the editor, confirm each install, then reload the editor. They live in
-// the browser profile (tasks/install-addons.md).
+// does: View → Addon manager → Install new addon…, confirm each install, then reload the
+// editor. They live in the browser profile (tasks/install-addons.md). Not by dropping them:
+// the editor's drop handler skips legacy SDK v1 plugins and behaviors without a word.
 import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Page } from "playwright";
-import { drop } from "./bridge.ts";
+import { clickMainSubmenuItem } from "./editor.ts";
 import { matchLangKey, type EditorText } from "./lang.ts";
 import { parseBundledAddon } from "./observe.ts";
 import { readZipEntry } from "./project.ts";
@@ -56,7 +57,7 @@ export async function collectAddons(paths: string[]): Promise<{ addons: AddonFil
     }
     if (!found.length) throw new Error(`no .c3addon files in ${paths.join(", ")}`);
     const addons = await Promise.all(found.map(async (file): Promise<AddonFile> => {
-      const json = await readZipEntry(file, "addon.json").then((s) => (s ? JSON.parse(s) : null)).catch(() => null);
+      const json = await readZipEntry(file, "addon.json").then((s) => (s ? JSON.parse(s.replace(/^\uFEFF/, "")) : null)).catch(() => null);
       return { file, id: json?.id ?? null, name: json?.name ?? null, version: json?.version ?? null, type: json?.type ?? null };
     }));
     return { addons, cleanup: async () => { for (const d of temps) await rm(d, { recursive: true, force: true }); } };
@@ -66,9 +67,9 @@ export async function collectAddons(paths: string[]): Promise<{ addons: AddonFil
   }
 }
 
-// Drop the addons on the editor and answer its dialogs: one install prompt per addon (or a
-// refusal), then "install finished". The editor handles them in drop order. Reload the
-// editor afterwards to use them.
+// Pick the addons in the Addon manager and answer the editor's dialogs: one install prompt
+// per addon (or a refusal), then "install finished". The editor handles them in the order
+// given. Reload the editor afterwards to use them.
 export async function installAddons(page: Page, text: EditorText, addons: AddonFile[], timeoutMs: number): Promise<AddonResult[]> {
   const results: (AddonResult | null)[] = addons.map(() => null);
   // The first file without an answer yet, preferring one that matches what the editor shows.
@@ -77,15 +78,18 @@ export async function installAddons(page: Page, text: EditorText, addons: AddonF
     return open.find((i) => match(addons[i])) ?? open[0];
   };
   const finished = text.t("ui.dialogs.addonManager.install-confirmation.message");
-  await drop(page, addons.map((a) => a.file));
+  await clickMainSubmenuItem(page, text.t("main-menu.view-menu.menu-name"), text.t("main-menu.view-menu.addon-manager"));
+  await page.waitForSelector("#addonManagerDialog[open]", { timeout: 10_000 });
+  const [chooser] = await Promise.all([page.waitForEvent("filechooser", { timeout: 10_000 }), page.click("#addonManagerDialog .installAddon")]);
+  await chooser.setFiles(addons.map((a) => a.file));
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     await page.waitForTimeout(250);
     const d = await page.evaluate(() => {
-      const el = document.querySelector("dialog[open]:not(#progressDialog)") as HTMLElement | null;
+      const el = document.querySelector("dialog[open]:not(#progressDialog):not(#addonManagerDialog)") as HTMLElement | null;
       if (!el) return null;
       const lines = el.innerText.split("\n").map((l) => l.trim()).filter(Boolean);
-      return { id: el.id, body: lines.slice(1).join("\n") };
+      return { id: el.id, body: lines.slice(1).join("\n"), shown: el.innerText };
     });
     if (!d) continue;
     if (d.id === "addonConfirmInstallDialog") {
@@ -116,7 +120,9 @@ export async function installAddons(page: Page, text: EditorText, addons: AddonF
         if (done) break;
       }
     }
-    await page.waitForFunction((id) => !document.querySelector(`#${id}[open]`), d.id, { timeout: 5000 }).catch(() => {});
+    // The editor reuses the dialog for the next addon: wait until it's closed or shows something else.
+    await page.waitForFunction(({ id, shown }) => (document.querySelector(`#${id}[open]`) as HTMLElement | null)?.innerText !== shown, d, { timeout: 5000 }).catch(() => {});
   }
+  await page.click("#addonManagerDialog .okButton", { timeout: 5000 }).catch(() => {});
   return addons.map((a, i) => results[i] ?? { ...a, outcome: "unknown" as const });
 }

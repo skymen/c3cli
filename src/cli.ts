@@ -45,7 +45,7 @@ function withOpenOptions(cmd: Command): Command {
   .option("--timeout <seconds>", "give up after this long", (v) => Number(v), 60)
   .option("--headed", "show the browser window", false)
   .option("--profile <dir>", "use (and keep) this browser profile; default: a fresh temporary profile per run")
-  .option("--no-install-bundled-addons", "decline the editor's prompt to install addons bundled in the project")
+  .option("--no-install-bundled-addons", "don't install the addons bundled in the project (by default they're trusted and installed, without prompts)")
   .option("--addons <path>", "install these addons first (.c3addon, a folder of them, or a zip; repeatable); they stay in the profile (the daemon's, with the daemon)", collect, [])
   .option("--keep-open", "leave the editor open until the window is closed (implies --headed)", false)
   .option("--no-daemon", "use a private browser even if the daemon is running");
@@ -143,7 +143,7 @@ const addonsCmd = program.command("addons").description("Manage the addons insta
 
 interface AddonsOpts { profile?: string; branch: Branch; release?: string; report?: "json"; timeout: number; headed: boolean; daemon: boolean }
 
-addonsCmd.command("install").description("Install addons into a browser profile (--profile) or the running daemon's, the way a user does: drop, confirm, reload")
+addonsCmd.command("install").description("Install addons into a browser profile (--profile) or the running daemon's, the way a user does: Addon manager → Install new addon…, confirm, reload")
   .argument("<paths...>", ".c3addon files, folders of them, or zips")
   .option("--profile <dir>", "the browser profile to install into (default: the running daemon's)")
   .addOption(new Option("--branch <branch>", "editor branch to install with").choices(["stable", "beta", "lts"]).default("stable"))

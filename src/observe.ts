@@ -80,7 +80,12 @@ export function parseMissingAddons(dialogs: DialogInfo[], text: EditorText | nul
     type,
     template: text?.raw(`ui.dialogs.missingAddons.missing-${type.toLowerCase()}-format`) ?? `${type} [b]{0}[/b] ({1}) by [i]{2}[/i]`,
   }));
+  // A note may follow the list ("Note: legacy (SDK v1) addons are no longer supported…" after
+  // r449, or about the C2 runtime), starting with a bold "Note:" in the editor's language.
+  const note = text?.raw("ui.dialogs.missingAddons.sdk-v1-note") ?? text?.raw("ui.dialogs.missingAddons.c2-runtime-compatibility-note") ?? "";
+  const noteStart = /^\[b\](.+?)\[\/b\]/.exec(note)?.[1] ?? "Note:";
   return d.body.split("\n").slice(1).flatMap((line): MissingAddon[] => {
+    if (line.trim().startsWith(noteStart)) return [];
     for (const f of formats) {
       const v = fillTemplate(f.template, line);
       if (v) return [{ type: f.type, name: v[0], id: v[1], author: v[2] || null }];
@@ -136,6 +141,9 @@ export async function waitForOutcome(page: Page, opts: {
     const d = (await readDialogs(page)).find((x) => x.id === "addonConfirmInstallDialog");
     if (!d) return false;
     bundledAddons.push(parseBundledAddon(d.body, opts.installBundledAddons, text));
+    // Accepting also ticks "Don't ask me again for this addon": with a kept profile the next
+    // open of the project doesn't prompt at all.
+    if (opts.installBundledAddons) await page.check("#addonConfirmInstallDialog .dontAskAgain", { timeout: 2000 }).catch(() => {});
     await page.click(`#addonConfirmInstallDialog ${opts.installBundledAddons ? ".okButton" : ".cancelButton"}`);
     await page.waitForFunction(() => !document.querySelector("#addonConfirmInstallDialog[open]"), null, { timeout: 5000 }).catch(() => {});
     return true;

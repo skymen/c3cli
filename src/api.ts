@@ -18,6 +18,7 @@ import { diffProjects, type SaveDiff } from "./diff.ts";
 import { collectAddons, installAddons, type AddonResult } from "./addons.ts";
 import { Bridge, type Root } from "./bridge.ts";
 import { loadEditor, newProjectInEditor, saveAsInEditor, saveInEditor } from "./editor.ts";
+import { bundledAddonHashes, rememberAddons } from "./remember.ts";
 import { exportWeb, type ExportOptions, type ExportResult } from "./export.ts";
 import { collect, waitForOutcome, type BundledAddon, type DialogInfo, type MissingAddon, type Outcome } from "./observe.ts";
 import { EditorLoadError, LocalPool, type Lease, type TabSource, type TabStartup } from "./pool.ts";
@@ -173,6 +174,12 @@ export class C3Editor {
       // After the reload, if any: what the editor logs while starting isn't the project's.
       const collector = collect(page);
       const bridge = await Bridge.attach(page);
+      // Accepting bundled addons: trust them before the drop, so the editor doesn't ask.
+      // The prompt handling below stays for whatever this misses.
+      if (opts.installBundledAddons ?? true) {
+        const hashes = await bundledAddonHashes(info.path, info.kind);
+        if (hashes.length && await rememberAddons(page, hashes)) notes.push(`${hashes.length} bundled addon(s) trusted before opening (no install prompts)`);
+      }
       const openedAt = Date.now();
       const root = await bridge.open(info.path, info.kind);
       const result = await waitForOutcome(page, {

@@ -38,7 +38,8 @@ test("mostly-placeholder templates don't match arbitrary text", () => {
 
 test("missing addons are parsed from the dialog body", () => {
   const dialogs = [{ id: "missingAddonsDialog", langKey: null, title: "Missing addons", buttons: ["Close"],
-    body: "The project you are opening uses…\nEffect Foil Effect (dumivid_HolographicFoil) by dumivid\nPlugin Dedra SDK (skymen_dedra_sdk_wrapper)" }];
+    body: "The project you are opening uses…\nEffect Foil Effect (dumivid_HolographicFoil) by dumivid\nPlugin Dedra SDK (skymen_dedra_sdk_wrapper)\n" +
+      "Note: legacy (SDK v1) addons are no longer supported in this release of Construct and so cannot be installed. The last release that supports legacy addons is the r449 LTS release." }];
   assert.deepEqual(parseMissingAddons(dialogs), [
     { type: "Effect", name: "Foil Effect", id: "dumivid_HolographicFoil", author: "dumivid" },
     { type: "Plugin", name: "Dedra SDK", id: "skymen_dedra_sdk_wrapper", author: null },

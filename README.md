@@ -52,6 +52,10 @@ c3cli drops the project on the editor where it is, as you would from Finder: not
 copied, so a project at the root of a big repo opens as fast as any other. Only `save`
 without `--to` writes to the project; `--to` never overwrites anything.
 
+The editor always runs with its UI animations off (its `disable-ui-animations` flag), in
+`--headed` and `--keep-open` too: menus and dialogs open at once, so c3cli doesn't wait for
+them.
+
 Common options:
 
 | Option | |
@@ -63,7 +67,7 @@ Common options:
 | `--timeout <s>` | Give up after this long (default 60) |
 | `--headed` | Show the browser window; `--keep-open` leaves it open |
 | `--profile <dir>` | Use and keep this browser profile (logins live there); default: a fresh one per run |
-| `--no-install-bundled-addons` | Decline the editor's offer to install addons bundled in the project |
+| `--no-install-bundled-addons` | Don't install the addons bundled in the project. By default c3cli trusts them before opening, so the editor installs them without asking |
 | `--addons <path>` | Install these addons first (`.c3addon`, a folder of them, a zip) |
 
 A project saved with a newer release than the one chosen is refused by the editor. At a

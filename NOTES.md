@@ -17,10 +17,11 @@ limits · `[internal]` calling editor internals, demangling · `[cli]` command s
 
 ## Normal
 
+- [save] With the editor loaded with `?disable-ui-animations` (2026-09-27), the fixed 300/500 ms sleeps in `clickMainMenuItem`, `clickProjectMenuItem`, `clickProjectSubmenuItem` and the Save as / New helpers are probably unneeded: wait for the entry like `clickMainSubmenuItem` does, and measure. About 0.8 s per save as, export or new
+- [save] `saveAs` of a project that bundles its addons (opened with `installBundledAddons`) doesn't save it as committed: `bundleAddons` becomes false, every addon in `usedAddons` is marked `bundled: false`, `rootFileFolders` changes, and no `addons/` folder is written, so the saved copy then fails with "Missing addons" wherever they aren't installed. Seen on r445, r449-4, r449-5 and r495-2 (Flechita, Vicky, Stardiver, con-sule; c3merge's `fixtures/real/common/timing.ts`) (2026-09-26)
 
 ## Later
 
-- [open] r449 LTS: an SDK v1 `.c3addon` dropped on the editor gets no reaction at all in headless (no install prompt, no error, no console message within 60 s; two addons tried). SDK v2 addons install fine there, and `addons install` reports these as `unknown`. Matters only for LTS-only projects that don't bundle their addons. Try headed (needs full Chromium) or the Addon Manager's "Install new addon…" ([tasks/install-addons.md](tasks/install-addons.md)) (2026-09-26)
 
 ## Ideas
 

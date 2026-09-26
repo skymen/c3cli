@@ -47,7 +47,9 @@ export async function launch(opts: { profile?: string; headed: boolean; cdp?: bo
 
 // Load the editor and get it to an idle start page. Returns the dialogs dismissed on the way.
 export async function loadEditor(page: Page, release: Release, timeoutMs: number): Promise<string[]> {
-  const res = await page.goto(release.url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
+  // disable-ui-animations (the editor's own flag): menus and dialogs open at once, so a click
+  // needn't wait out an animation (View → Addon manager: 0.15 s instead of 1.2 s).
+  const res = await page.goto(`${release.url}?disable-ui-animations`, { waitUntil: "domcontentloaded", timeout: timeoutMs });
   if (res && !res.ok()) throw new ReleaseNotFound(`editor release ${release.name} not available (HTTP ${res.status()} for ${release.url})`);
   await page.waitForSelector("#mainMenuButton", { timeout: timeoutMs });
   await page.waitForTimeout(1500);
@@ -105,6 +107,22 @@ export async function clickProjectSubmenuItem(page: Page, submenu: string, title
   await page.locator("ui-menuitem[sub-menu]").nth(index).click();
   await page.waitForTimeout(500);
   await page.locator(`ui-menuitem[title="${title}"]`).click();
+}
+
+// Click Menu → <submenu> → <item>, both picked by the text they show (View → Addon manager,
+// whose items have no title). Each entry is clicked once it's shown; the click itself waits
+// out any animation (a click during one is silently dropped).
+export async function clickMainSubmenuItem(page: Page, submenu: string, item: string): Promise<void> {
+  const clickLabel = async (label: string, where: string) => {
+    const entry = await page.waitForFunction((l) => [...document.querySelectorAll("ui-menuitem")]
+      .find((e) => (e as HTMLElement).offsetParent && (e as HTMLElement).innerText.trim().split("\n")[0] === l) ?? null, label, { timeout: 5000, polling: "raf" })
+      .catch(() => { throw new Error(`no "${label}" in ${where}`); });
+    await entry.asElement()!.click();
+  };
+  await waitForProgress(page);
+  await page.click("#mainMenuButton");
+  await clickLabel(submenu, "the main menu");
+  await clickLabel(item, `the ${submenu} menu`);
 }
 
 export async function listFiles(dir: string, base = dir): Promise<string[]> {
