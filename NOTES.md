@@ -14,37 +14,30 @@ limits · `[internal]` calling editor internals, demangling · `[cli]` command s
 
 ## Now
 
-- [open] Opening a folder that is a git repo root stages its whole `.git` directory (428 MB for Under The Red Sky) and the page dies ("Target page, context or browser has been closed"). Skip `.git` (and other non-project dirs) when staging. Found via c3merge `scripts/replay-merge.ts` (2026-09-23)
+- [open] Open by dropping the real path through CDP (`Input.dispatchDragEvent`) instead of copying the project into OPFS: works on the hosted editor for folders and `.c3p`, nothing copied, so the `.git`/`tools/` crash on a repo root (3.5 GB for Under The Red Sky) goes away. The dropped handle is read-only (no prompt to click in headless), so C3's writes go through a Node bridge that answers its permission checks and writes the real files: in-place Ctrl+S works for folders and `.c3p` (spike 2026-09-26). OPFS stays only for "save as" elsewhere, maybe not even that. The `saveAs` NotFoundError flake below may go with it. Check LTS/beta and the daemon's tabs ([tasks/open-project.md](tasks/open-project.md#drop-through-cdp-2026-09-26-hosted-r495-2-playwright-163-headless), spike 2026-09-26)
+- [cli] Editor language: a fresh profile takes the first supported language in `navigator.languages` (Playwright's default locale is the system's), and every text handle is English: menu `title`s, "Account"/"Log in", the "Web (HTML5)" tile, and dialog → lang-key matching (en-US file only). Important (skymen, 2026-09-26). Every string has a lang key (`main-menu.project-menu.open-local-folder-tooltip`, `…save-as-folder-tooltip`, `…export-tooltip`, `main-menu.account-menu`, `user-account.menu.log-in`, `exporters.html5.name`) and the editor sets `<html lang>`: look each text up in `loader/lang/precompiled-<lang>.json`, and launch fresh profiles with `locale: "en-US"`. Check the hosted editor serves the other languages' files at that path. Test: a fresh profile in every language C3 supports (16 in r500: de-DE, en-US, fr-FR, hr-HR, hu-HU, ru-RU, cs-CZ, es-ES, pt-BR, nl-NL, it-IT, sv-SE, tr-TR, uk-UA, zh-CN, zh-TW; read the list from the release, it may grow) runs open, save as, export and login without breaking (skymen, 2026-09-26). Next after the planning pass
 
 ## Normal
 
 - [open] Install unbundled SDK v2 addons from files (drop onto the editor, reload): standalone command, daemon, library, and `--addons <folder|zip>` on every command that opens a project ([tasks/install-addons.md](tasks/install-addons.md))
 
-- [save] Save across formats (folder → `.c3p` and back): only same-format save exists today ([tasks/save-export.md](tasks/save-export.md))
-- [internal] Per-release name map for the few internals we need (open-from-URL, project model, log), built with the demangle tool in `~/Documents/C3 Versions/C3-r500 copy/demangle`; fail loudly when a name is missing on a new release ([tasks/internal-api.md](tasks/internal-api.md))
-- [observe] Report contract v1 exists (`--report json`); still missing `repaired`. Sort which save diffs are canonicalisation and which are real changes ([tasks/observe.md](tasks/observe.md#report))
-- [open] Staging is one `evaluate` per ~8 MB batch of base64; measure on big projects (backupadam has 1918 files) and consider `page.route` streaming
-- [cli] Menu items are found by English `title` text; find a language-independent handle (lang keys are available, see observe.md)
+- [save] `c3cli new <folder|file.c3p> [--release rX]`: create a new project in C3 and save it, as a scaffold. The output is exactly what that release writes for an empty project, a clean starting point for tools, templates and test fixtures (skymen, 2026-09-26). Menu → New project, then the existing Save as path
 - [save] `saveAs` flakes with several tabs: the menu click times out while a `#progressDialog` still covers the page, or `page.evaluate` fails with "NotFoundError: A requested file or directory could not be found". Wait for the progress dialog to close before clicking; retry once. Seen in c3merge's lab (2 of 126 saves, r495-2, 3 tabs) and uid experiment (4 tabs) (2026-09-25)
 
 ## Later
 
-- [cli] Daemon: auto-restart a tab whose editor crashed mid-lease; health check in `daemon status`
-- [cli] Integration test suite (opt-in, needs network): turn `scripts/check-*.ts` into `node --test` cases
-
-- [cli] `c3cli eval <js>` against the editor page for ad-hoc experiments; `c3cli screenshot`
-- [cli] Scripted edits ("open, rename object type X, save") for generating merge fixtures inside the real editor — only if the internal API turns out stable enough
 
 ## Ideas
 
 - Export to other platforms (Cordova, desktop, Arcade…): skymen says ignore for now
 
-- Run as a GitHub Action service: `c3cli open` in CI to gate PRs on "the project opens in C3"
-- Diff C3's own save against input to learn C3's canonical formatting per release automatically
-- Watch mode: re-open on file change while editing JSON by hand
+- Watch mode: re-open on file change while editing JSON by hand, and report whether C3 still accepts it. Maybe a Node API feature only (skymen, 2026-09-26)
+- Daemon: auto-restart a tab whose editor crashed mid-lease; health check in `daemon status`. Not before skymen has used daemons more (2026-09-26)
+- Integration test suite (opt-in, needs network): turn `scripts/check-*.ts` into `node --test` cases. Too slow for now (skymen, 2026-09-26)
 
 ## Notes
 
+- The free edition never refuses to open a project; it only refuses to save or export one over its limits (skymen, 2026-09-26).
 - Verified in r500 `main.js`: search params read by the editor — `project`, `layout`,
   `eventsheet` (dev mode only; `project` loads `exampleProjects/debug/<name>.capx` through
   the internal fetch-and-open), `mode=dev`, and flags `safe-mode`, `debug`, `debug-defend`,

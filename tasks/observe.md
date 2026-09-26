@@ -50,6 +50,7 @@
 - **Preview outcome**: preview.md.
 
 ## Report
+`repaired` is dropped (skymen, 2026-09-26): c3merge's tests already tell from save diffs.
 ```json
 {
   "release": "r500", "host": "hosted|local",

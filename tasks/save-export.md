@@ -2,7 +2,8 @@
 
 **Status:** `c3cli save` implemented for same-format save-back (2026-09-23): folder → folder,
 `.c3p` → `.c3p`. `c3cli export` implemented for Web (HTML5) (2026-09-23). Other platforms
-and format conversion are not started.
+are not started. Format conversion (folder ↔ `.c3p`) is dropped (skymen, 2026-09-26): it's
+zipping/unzipping, no editor needed.
 
 ## Save as project folder (2026-09-23)
 `project.saveAs(to)` (library only) uses Menu → Project → Save as → "Save as project

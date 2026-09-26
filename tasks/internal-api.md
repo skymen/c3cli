@@ -1,6 +1,7 @@
 # Editor internals and demangling
 
-**Status:** not started (2026-09-21)
+**Status:** dropped (skymen, 2026-09-26): mangled names change with every release, so a
+name map is wasted work, and opening goes through the real menu (open-project.md, route G).
 
 - The editor is a mangled ES bundle (`main.js` ~1.4 MB). Property names are mangled
   per build (`Vz.Knr`, `zz.n6s.kn`), but literal strings (URL params, storage keys, lang
