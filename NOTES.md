@@ -18,7 +18,7 @@ limits · `[internal]` calling editor internals, demangling · `[cli]` command s
 ## Normal
 
 - [save] With the editor loaded with `?disable-ui-animations` (2026-09-27), the fixed 300/500 ms sleeps in `clickMainMenuItem`, `clickProjectMenuItem`, `clickProjectSubmenuItem` and the Save as / New helpers are probably unneeded: wait for the entry like `clickMainSubmenuItem` does, and measure. About 0.8 s per save as, export or new
-- [save] `saveAs` of a project that bundles its addons (opened with `installBundledAddons`) doesn't save it as committed: `bundleAddons` becomes false, every addon in `usedAddons` is marked `bundled: false`, `rootFileFolders` changes, and no `addons/` folder is written, so the saved copy then fails with "Missing addons" wherever they aren't installed. Seen on r445, r449-4, r449-5 and r495-2 (Flechita, Vicky, Stardiver, con-sule; c3merge's `fixtures/real/common/timing.ts`) (2026-09-26)
+- [save] Saving in the free edition (a profile that isn't logged in, i.e. every temporary one) unbundles the project's addons: the editor writes `bundleAddons` as `!free && setting` and each addon's `bundled` the same way, so the save has `bundleAddons: false`, every addon `bundled: false` and no `addons/` folder, and then fails with "Missing addons" wherever they aren't installed. Bundling is a paid feature (checked in the editor code, r495-2; seen on r445, r449-4, r449-5 and r495-2 with Flechita, Vicky, Stardiver and con-sule). Not a c3cli bug: log in (`c3cli login --profile`) to save such a project. But say so: when the input has `bundleAddons: true` and the editor runs the free edition, warn in the `save` report, or refuse without `--allow-unbundle` (2026-09-27)
 
 ## Later
 
@@ -34,6 +34,7 @@ limits · `[internal]` calling editor internals, demangling · `[cli]` command s
 ## Notes
 
 - The free edition never refuses to open a project; it only refuses to save or export one over its limits (skymen, 2026-09-26).
+- Saving a project that bundles its addons needs a logged-in profile: the free edition unbundles it, and c3cli won't work around that (no patching the editor, no restoring the bundle after the save) (skymen, 2026-09-27).
 - `scripts/spike-{save,export,layout,multitab,preview}.ts` use the OPFS helpers removed on 2026-09-26 (projects are dropped now). They record past findings and no longer run.
 - The Settings dialog's "Show in-progress languages" adds more languages than the 17 `check-languages.ts` tests (the ones `main.html` ships). Not tested.
 - Verified in r500 `main.js`: search params read by the editor — `project`, `layout`,
