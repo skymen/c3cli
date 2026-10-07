@@ -5,8 +5,40 @@
 (2026-09-26, skymen chose "no `--to` means in place"). `saveAs` takes a folder or a `.c3p`;
 `c3cli new` creates a project and saves it (2026-09-26). `c3cli export` implemented for Web
 (HTML5) (2026-09-23), and works on r449 LTS, which has no zip/folder choice (always a zip).
-Other platforms are not started. Format conversion (folder ↔ `.c3p`) is dropped (skymen, 2026-09-26): it's
+Other platforms: implemented 2026-10-06, see [export-platforms.md](export-platforms.md). Format conversion (folder ↔ `.c3p`) is dropped (skymen, 2026-09-26): it's
 zipping/unzipping, no editor needed.
+
+## Free edition unbundles addons (2026-10-06)
+`save()` / `saveAs()` refuse a project with `bundleAddons: true` when the editor's edition
+isn't paid (logged out, a free account, or not known yet): `ok: false`, `refused:
+"free-edition-unbundles-addons"`, exit 2, nothing written (no `--to` target created).
+`allowUnbundle` / `--allow-unbundle` saves anyway with a warning in `warnings`. Tested on
+`3d-lighting` (r449-3, bundles one effect) on r495-2, logged out: refused in place and with
+`--to`, input untouched; with the flag, saved with `bundleAddons: false`. Not tested with a
+paid account yet (needs a login).
+
+## What else a free-edition save changes (2026-10-06)
+Code (an agent read r449-5, r495-2, r500, r505; same logic in all): the free check is one
+`self.app` method (`x_` in r500, `vA` r495-2, `WU` r505, `lj` r449-5); 19 calls in
+projectResources.js (all the save code), 6 in main.js. Two affect what's written:
+- `bundleAddons` and each addon's `bundled` (known), and no `addons/` files.
+- **Breakpoints**: events, groups, conditions and actions lose `"breakpoint": true`
+  (`Rbt(){return!Wu.x_()&&this.zJs}`), and a free editor refuses them already when it opens
+  the project, showing `freeEditionLimitDialog` ("Not available in the Free Edition:
+  Breakpoints…"). Checked: `battleship` with 3 breakpoints, Save as on r495-2 → paid 3,
+  free 0; the open reports the dialog (exit 1). Ctrl+S only drops them from sheets it rewrites.
+Everything else is UI-only or export-only: loader style (forced "splash" at export only),
+layers, effects, web fonts, families, timelines, eases, meshes, restricted plugins,
+bookmarks, scripting limits; the editor never strips them on save.
+Compared on 10 projects (r495-2, Save as, paid twice + free, one after the other): besides
+the addon flags, only layout `.uistate.json` view positions (~12 px, the free top bar) and
+one event sheet `sid` that differs between two paid saves too.
+
+## Menu clicks without fixed sleeps (2026-10-06)
+The menu helpers click each entry as soon as it's shown (`clickMenuEntry` in `src/editor.ts`),
+and `dismissDialogs` waits for the dialog to close instead of 300 ms. Timed on r495-2 with
+`untitled.c3p`, 3 rounds: Save as 3.0 → 2.0 s, export 1.6 → 1.1 s (warm), New 5.5 → 4.0 s.
+`check-languages.ts` passes on stable in en-US, fr-FR, ja-JP, zh-CN, de-DE.
 
 ## Since 2026-09-26
 The OPFS sections below are history: saves now go through `src/bridge.ts`

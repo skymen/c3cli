@@ -10,6 +10,8 @@ export interface ProjectInfo {
   savedWithRelease: number | null;
   // Addon id → type, from the project's usedAddons.
   addonTypes: Record<string, "Plugin" | "Behavior" | "Effect">;
+  // The project bundles its addons (a paid feature: the free edition unbundles them on save).
+  bundleAddons: boolean;
 }
 
 export async function readProjectInfo(p: string): Promise<ProjectInfo> {
@@ -26,7 +28,7 @@ export async function readProjectInfo(p: string): Promise<ProjectInfo> {
     const type = { plugin: "Plugin", behavior: "Behavior", effect: "Effect" }[String(a?.type)] as ProjectInfo["addonTypes"][string] | undefined;
     if (type && typeof a.id === "string") addonTypes[a.id] = type;
   }
-  return { path: abs, kind, name: json?.name ?? null, savedWithRelease: json?.savedWithRelease ?? null, addonTypes };
+  return { path: abs, kind, name: json?.name ?? null, savedWithRelease: json?.savedWithRelease ?? null, addonTypes, bundleAddons: json?.bundleAddons === true };
 }
 
 export function readZipEntry(zipPath: string, wanted: string): Promise<string | null> {

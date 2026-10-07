@@ -14,18 +14,21 @@ limits · `[internal]` calling editor internals, demangling · `[cli]` command s
 
 ## Now
 
+- [auth] skymen tests with the real account: switching accounts, login by email, `logout` (the shared session itself, the daemon and paid features passed on 2026-10-06). See [tasks/auth.md](tasks/auth.md)
 
 ## Normal
 
-- [save] With the editor loaded with `?disable-ui-animations` (2026-09-27), the fixed 300/500 ms sleeps in `clickMainMenuItem`, `clickProjectMenuItem`, `clickProjectSubmenuItem` and the Save as / New helpers are probably unneeded: wait for the entry like `clickMainSubmenuItem` does, and measure. About 0.8 s per save as, export or new
-- [save] Saving in the free edition (a profile that isn't logged in, i.e. every temporary one) unbundles the project's addons: the editor writes `bundleAddons` as `!free && setting` and each addon's `bundled` the same way, so the save has `bundleAddons: false`, every addon `bundled: false` and no `addons/` folder, and then fails with "Missing addons" wherever they aren't installed. Bundling is a paid feature (checked in the editor code, r495-2; seen on r445, r449-4, r449-5 and r495-2 with Flechita, Vicky, Stardiver and con-sule). Not a c3cli bug: log in (`c3cli login --profile`) to save such a project. But say so: when the input has `bundleAddons: true` and the editor runs the free edition, warn in the `save` report, or refuse without `--allow-unbundle` (2026-09-27)
+- [save] Linux exports sometimes sit at "Adding files..." until the timeout (2 of ~12 runs, 2026-10-06); retrying worked. Watch the runtime download (requests to downloads.scirra.com) and retry or report it when it stalls. See [tasks/export-platforms.md](tasks/export-platforms.md)
+- [open] Now and then the editor ignores the project drop with nothing in the way (3 of 12 CLI runs in one batch, 0 of 36 after). `open` now drops up to 3 times and says so in the report notes ("took the project on drop 2"): watch for those notes to find the cause (2026-10-06)
+- [host] `loadEditor` still sleeps a fixed 1.5 s once the menu button shows, on every tab load (so after every project in the pool). Wait for what it's for instead, and measure (2026-10-06)
+- [auth] The keyring store for Windows and Linux has only run on macOS: try it on a Windows machine and a Linux desktop, and the 0600-file fallback on a Linux without a Secret Service (2026-10-06)
 
 ## Later
 
+- [save] Linux and NW.js exports download their runtime (126 MB+) at every run: a Playwright-route disk cache crashed the page, so seed the editor's own runtime cache (localforage in the profile) instead. "Maybe later" (skymen, 2026-10-07). See [tasks/export-platforms.md](tasks/export-platforms.md)
+
 
 ## Ideas
-
-- Export to other platforms (Cordova, desktop, Arcade…): skymen says ignore for now
 
 - Watch mode: re-open on file change while editing JSON by hand, and report whether C3 still accepts it. Maybe a Node API feature only (skymen, 2026-09-26)
 - Daemon: auto-restart a tab whose editor crashed mid-lease; health check in `daemon status`. Not before skymen has used daemons more (2026-09-26)
@@ -35,6 +38,9 @@ limits · `[internal]` calling editor internals, demangling · `[cli]` command s
 
 - The free edition never refuses to open a project; it only refuses to save or export one over its limits (skymen, 2026-09-26).
 - Saving a project that bundles its addons needs a logged-in profile: the free edition unbundles it, and c3cli won't work around that (no patching the editor, no restoring the bundle after the save) (skymen, 2026-09-27).
+- A free-edition save changes only two things in the files: addon bundling, and breakpoints (dropped). Everything else the free edition limits is blocked in the UI or at export, never stripped on save (code of r449-5 to r505, and 10 projects compared, 2026-10-06).
+- Export options that aren't given keep what the editor shows (its defaults, or a kept profile's last choices on r488+); no reset to C3's defaults. Warnings stop exports unless `--accept-warnings` (skymen, 2026-10-07).
+- No guard for breakpoints: they matter less than bundled addons, and skymen is fine with a free save dropping them as long as nothing else changes (2026-10-06).
 - `scripts/spike-{save,export,layout,multitab,preview}.ts` use the OPFS helpers removed on 2026-09-26 (projects are dropped now). They record past findings and no longer run.
 - The Settings dialog's "Show in-progress languages" adds more languages than the 17 `check-languages.ts` tests (the ones `main.html` ships). Not tested.
 - Verified in r500 `main.js`: search params read by the editor — `project`, `layout`,

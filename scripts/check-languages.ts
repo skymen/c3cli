@@ -91,9 +91,12 @@ for (const lang of langs) {
       const created = await editor.create(path.join(dir, "new.c3p"), { release: release.name }).catch((e: Error) => e);
       check(!(created instanceof Error), `new → ${created instanceof Error ? created.message : `${created.saved!.written.join(", ")}`}`);
       if (!(created instanceof Error)) await created.close();
-      const m = await editor.open("fixtures/folder/demofoil", { release: release.name });
+      // demofoil is saved with r466: older releases (LTS) refuse it as newer, so they get one
+      // saved with r449-2.
+      const [fixture, missing] = release.num >= 46600 ? ["demofoil", "Effect:dumivid_HolographicFoil"] : ["16-color-replace-alpha", "Effect:16-color-replacer"];
+      const m = await editor.open(`fixtures/folder/${fixture}`, { release: release.name });
       const ids = m.report.missingAddons.map((a) => `${a.type}:${a.id}`);
-      check(m.report.outcome === "missing-addons" && ids.includes("Effect:dumivid_HolographicFoil"), `missing addons → ${m.report.outcome} ${ids.join(" ")}`);
+      check(m.report.outcome === "missing-addons" && ids.includes(missing), `missing addons → ${m.report.outcome} ${ids.join(" ")}`);
       await m.close();
     } finally {
       await editor.close();

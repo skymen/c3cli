@@ -7,8 +7,10 @@ import { ReleaseNotFound, launch, loadEditor, type Session } from "./editor.ts";
 import type { Worker } from "playwright";
 import { captureRuntime, evalIn, type RemoteRuntime } from "./preview.ts";
 import type { Release } from "./release.ts";
+import { SharedSession } from "./session.ts";
 
-export interface TabStartup { dialogs: string[]; pageErrors: string[]; consoleErrors: string[] }
+// `notes`: what happened to the shared login while the editor loaded (expired, unreachable).
+export interface TabStartup { dialogs: string[]; pageErrors: string[]; consoleErrors: string[]; notes?: string[] }
 
 export interface Lease {
   tabId: string;
@@ -58,6 +60,9 @@ export interface PoolOptions {
   cdp?: boolean;
   loadTimeoutMs?: number;
   locale?: string;
+  // Log the tabs in with the session `c3cli login` saved (default), unless the profile has a
+  // login of its own. False: stay logged out.
+  sharedSession?: boolean;
 }
 
 export class LocalPool implements TabSource {
@@ -66,15 +71,27 @@ export class LocalPool implements TabSource {
   // Bumped by reloadIdle(): a tab whose editor loaded before that reloads before its next lease.
   private generation = 0;
 
-  private constructor(readonly session: Session, private tabs: Tab[], private loadTimeoutMs: number) {}
+  // Notes from attaching the shared session, for the first tab that loads.
+  private sessionNotes: string[] = [];
+
+  private constructor(readonly session: Session, private tabs: Tab[], private loadTimeoutMs: number, readonly shared: SharedSession | null) {}
 
   static async launch(opts: PoolOptions): Promise<LocalPool> {
     const session = await launch({ profile: opts.profile, headed: opts.headed, cdp: opts.cdp, locale: opts.locale });
+    const notes: string[] = [];
+    let shared: SharedSession | null = null;
+    try {
+      if (opts.sharedSession ?? true) shared = await SharedSession.attach(session.context, opts.profile ?? null, notes);
+    } catch (e) {
+      await session.close();
+      throw e;
+    }
     const tabs: Tab[] = Array.from({ length: Math.max(1, opts.tabs) }, (_, i) => ({
       id: `tab-${i + 1}`, page: null, release: null, busy: false, ready: Promise.resolve(), loading: false, popups: [], generation: 0,
       startup: { dialogs: [], pageErrors: [], consoleErrors: [] },
     }));
-    const pool = new LocalPool(session, tabs, opts.loadTimeoutMs ?? 60_000);
+    const pool = new LocalPool(session, tabs, opts.loadTimeoutMs ?? 60_000, shared);
+    pool.sessionNotes = notes;
     tabs[0].page = session.page;
     if (opts.warm) {
       for (const tab of tabs) tab.ready = pool.load(tab, opts.warm).catch(() => {});
@@ -201,6 +218,8 @@ export class LocalPool implements TabSource {
       page.off("pageerror", onError);
       page.off("console", onConsole);
     }
+    const notes = [...this.sessionNotes.splice(0), ...(this.shared?.drainNotes() ?? [])];
+    if (notes.length) startup.notes = notes;
     // Lets a daemon client find this tab among the browser's pages.
     await page.evaluate((id) => { (window as any).__c3cliTabId = id; }, tab.id);
     tab.release = release;

@@ -51,7 +51,7 @@ A real one, trimmed:
 | `version` | Report format version |
 | `project` | `path`, `kind` (`folder` or `file`), `name` from `project.c3proj`, and the release it was `savedWithRelease` |
 | `release` | The editor release that was used |
-| `notes` | What c3cli decided along the way, such as switching to the project's release |
+| `notes` | What c3cli decided along the way, such as switching to the project's release, and what happened to the shared login (expired, server unreachable) |
 | `tab` | The editor tab used (`tab-1`, or a daemon tab) |
 | `via` | `local` (a private browser) or `daemon` (CLI only) |
 | `outcome` | See below |
@@ -92,8 +92,11 @@ editor wrote. Failures are a `tool-error`.
 
 ## Added by save, preview and export
 
-**`save`**: `{ to, inPlace, ok, written, savedWithRelease: { before, after }, diff: { filesChanged, changed[], added[], removed[] }, error? }`.
+**`save`**: `{ to, inPlace, ok, written, savedWithRelease: { before, after }, diff: { filesChanged, changed[], added[], removed[] }, error?, refused?, warnings? }`.
 `written` lists the files the editor wrote (or created or deleted) during the save.
+`refused` is `"free-edition-unbundles-addons"` when c3cli didn't save a project that bundles
+its addons because the editor runs the free edition (exit 2); `warnings` says it saved one
+anyway (`--allow-unbundle`).
 `inPlace` is true without `--to`; `diff` is then null. With `--to`, `diff` compares the
 result with the input, file by file. `.c3p` files are unzipped for the comparison.
 
@@ -108,8 +111,12 @@ result with the input, file by file. `.c3p` files are unzipped for the compariso
 - `error`: why it didn't start or stopped.
 
 **`export`**:
-- `outcome`: `exported`, `refused-by-edition` or `export-failed`;
+- `outcome`: `exported`, `refused-by-edition`, `refused` (the project failed the editor's
+  checks, or a warning without `--accept-warnings`) or `export-failed`;
+- `platform`: `web`, `android`, `windows`…;
 - `to`, `files`: where it went, and the file count for folder output;
-- `suggestedName`: the zip name the editor proposed;
+- `outputs`: each zip the export made, `{ name, to }` (with several, `to` is a subfolder);
+- `suggestedName`: the (first) zip name the editor proposed;
 - `reportText`: the export report dialog's text;
+- `warnings`: the warnings gone past with `--accept-warnings`;
 - `dialogs`, `error`.

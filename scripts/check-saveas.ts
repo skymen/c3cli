@@ -25,7 +25,8 @@ await Promise.all(Array.from({ length: tabs }, async () => {
     const p = await editor.open(input, { release: release.name });
     try {
       if (p.report.outcome !== "opened") { failures.push(`${i} ${input}: ${p.report.outcome}`); continue; }
-      const s = await p.saveAs(path.join(scratch, String(i)));
+      // Some fixtures bundle addons; this checks the save mechanics, not the free edition.
+      const s = await p.saveAs(path.join(scratch, String(i)), { allowUnbundle: true });
       if (!s.ok) failures.push(`${i} ${input}: ${s.error}`);
     } finally {
       await p.close();

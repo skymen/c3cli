@@ -26,12 +26,14 @@ export const DAEMON_DIR = path.join(os.homedir(), ".config", "c3cli");
 export const DEFAULT_SOCKET = path.join(DAEMON_DIR, "daemon.sock");
 export const DAEMON_LOG = path.join(DAEMON_DIR, "daemon.log");
 
-export interface DaemonOptions { socket: string; tabs: number; profile?: string; headed: boolean; warm: Release }
+export interface DaemonOptions { socket: string; tabs: number; profile?: string; headed: boolean; warm: Release; guest?: boolean }
 
 export interface DaemonStatus {
   pid: number;
   startedAt: string;
   profile: string;
+  // The account of the shared session the tabs use (c3cli login), or null.
+  sharedSession?: string | null;
   cdpUrl: string;
   tabs: { id: string; busy: boolean; release: string | null }[];
 }
@@ -42,7 +44,7 @@ export async function runDaemon(opts: DaemonOptions): Promise<void> {
   if (await isRunning(opts.socket)) throw new Error(`a daemon is already running on ${opts.socket}`);
   await rm(opts.socket, { force: true });
 
-  const pool = await LocalPool.launch({ profile: opts.profile, headed: opts.headed, tabs: opts.tabs, warm: opts.warm, cdp: true });
+  const pool = await LocalPool.launch({ profile: opts.profile, headed: opts.headed, tabs: opts.tabs, warm: opts.warm, cdp: true, sharedSession: !opts.guest });
   const startedAt = new Date().toISOString();
   const log = (msg: string) => console.log(`${new Date().toISOString()} ${msg}`);
   const leases = new Map<string, Lease>();
@@ -67,7 +69,7 @@ export async function runDaemon(opts: DaemonOptions): Promise<void> {
     const handle = async (req: { id: number; op: string; release?: string; tabId?: string; timeoutMs?: number; expr?: string }) => {
       try {
         if (req.op === "status") {
-          reply({ id: req.id, ok: true, pid: process.pid, startedAt, profile: opts.profile ?? "(temporary)", cdpUrl: pool.cdpUrl, tabs: pool.status() });
+          reply({ id: req.id, ok: true, pid: process.pid, startedAt, profile: opts.profile ?? "(temporary)", sharedSession: pool.shared?.username ?? null, cdpUrl: pool.cdpUrl, tabs: pool.status() });
         } else if (req.op === "lease") {
           const lease = await pool.lease(exactRelease(req.release!), req.timeoutMs ?? 120_000);
           if (sock.destroyed) { await lease.done(); return; }
@@ -159,7 +161,7 @@ export async function daemonStatus(socket = DEFAULT_SOCKET): Promise<DaemonStatu
   if (!c) return null;
   try {
     const r = await c.request({ op: "status" }, 5000);
-    return { pid: r.pid, startedAt: r.startedAt, profile: r.profile, cdpUrl: r.cdpUrl, tabs: r.tabs };
+    return { pid: r.pid, startedAt: r.startedAt, profile: r.profile, sharedSession: r.sharedSession ?? null, cdpUrl: r.cdpUrl, tabs: r.tabs };
   } finally {
     c.close();
   }

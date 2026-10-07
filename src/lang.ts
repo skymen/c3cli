@@ -60,16 +60,27 @@ export function loadText(assetUrl: string, lang = "en-US"): Promise<EditorText> 
 }
 
 // From lang files' `text` objects, most specific first; exported for tests.
+// Like the editor, a string the language doesn't translate shows as the English one in
+// brackets, "[Construct 3 LTS]" (links excepted). Checked in main.js on r449-5, r495-2 and
+// r505; Japanese on r449-5 has no ui.title-lts, so its window titles read
+// "<project> - [Construct 3 LTS]".
 export function makeText(sources: Record<string, unknown>[], lang: string): EditorText {
   const flat = new Map<string, string>();
   for (const src of [...sources].reverse()) for (const [k, v] of flatten(src, "")) flat.set(k, v);
+  const own = sources.length > 1 ? new Set(flatten(sources[0], "").map(([k]) => k)) : null;
+  const untranslated = (key: string, v: string) => !!own && !own.has(key) && !/^https?:/.test(v) && !key.endsWith(".help-url");
   return {
     lang,
-    raw: (key) => flat.get(key) ?? null,
+    raw: (key) => {
+      const v = flat.get(key);
+      if (v === undefined) return null;
+      return untranslated(key, v) ? `[${v}]` : v;
+    },
     t: (key) => {
       const v = flat.get(key);
       if (v === undefined) throw new Error(`the editor has no text for "${key}" (${lang}); its UI changed, c3cli needs updating`);
-      return squash(stripMarkup(v));
+      const text = squash(stripMarkup(v));
+      return untranslated(key, v) ? `[${text}]` : text;
     },
     templates: buildTemplates(Object.fromEntries(flat)),
   };

@@ -1,6 +1,6 @@
 {
   "name": "@skymen75/c3cli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Drive the Construct 3 editor from the command line and from Node: open, save, preview and export projects, and get a verdict back",
   "keywords": [
     "construct3",
@@ -44,6 +44,7 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@napi-rs/keyring": "^2.1.0",
     "commander": "^15.0.0",
     "playwright": "^1.63.0",
     "yauzl": "^3.4.0"

@@ -23,6 +23,8 @@ const editor = await C3Editor.launch({
   warm: { branch: "stable" },         // load this release in the tabs up front
   locale: "en-US",                    // the browser's language (default); a fresh profile's
                                       // editor takes it, and c3cli works in any of C3's languages
+  sharedSession: true,                // log in with the session `c3cli login` saved (default),
+                                      // unless `profile` has a login of its own; false: logged out
 });
 
 // Or borrow tabs from a running daemon (`c3cli daemon start`). Throws if it isn't running.
@@ -60,6 +62,7 @@ await project.save("out/");              // Ctrl+S into a new folder (or a new .
 await project.saveAs("full/");           // "Save as project folder": every file from the editor's memory
 await project.saveAs("full.c3p");        // "Save as single file"
 await project.export("game.zip", { minify: "none", offline: true });   // or a new folder
+await project.export("win.zip", { platform: "windows", settings: { arch: "x64", bundle: "single-file" } });
 ```
 
 `save` only rewrites what C3 considers changed. `saveAs` writes everything C3 holds, so
@@ -67,6 +70,10 @@ use it to see the project the way C3 sees it. After `saveAs`, the project lives 
 place (`project.path`), and `save()` writes there. None of them overwrite an existing
 target. Outside these calls the editor can't write the project: its own saves fail, unless
 you call `project.allowEditorSaves()` (what `--keep-open` does).
+
+`save` and `saveAs` refuse a project that bundles its addons when the editor runs the free
+edition, which would unbundle them: the report has `ok: false` and `refused:
+"free-edition-unbundles-addons"`. Pass `{ allowUnbundle: true }` to save anyway.
 
 ## New projects and addons
 
@@ -132,5 +139,8 @@ Use them for anything the API doesn't cover.
 - `REPORT_VERSION`
 - `resolveRelease({ branch | release })`: the exact release a branch points to now
 - `daemonStatus()`, `isDaemonRunning()`, `DEFAULT_SOCKET`
-- The types: `OpenReport`, `OpenOptions`, `LaunchOptions`, `CreateOptions`, `SaveReport`,
+- `EXPORT_PLATFORMS`, and `exportSettingsHelp(platform)`: each `settings` name a platform takes
+  ([commands.md](commands.md#export) has the table); `acceptWarnings: true` goes on past the
+  editor's warnings
+- The types: `OpenReport`, `OpenOptions`, `LaunchOptions`, `CreateOptions`, `SaveOptions`, `SaveReport`, `ExportPlatform`,
   `ExportReport`, `ExportOptions`, `AddonResult`, `PreviewResult`, `Branch`, `Release`

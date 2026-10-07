@@ -17,13 +17,14 @@ import type { Page } from "playwright";
 import { diffProjects, type SaveDiff } from "./diff.ts";
 import { collectAddons, installAddons, type AddonResult } from "./addons.ts";
 import { Bridge, type Root } from "./bridge.ts";
-import { loadEditor, newProjectInEditor, saveAsInEditor, saveInEditor } from "./editor.ts";
+import { dismissDialogs, loadEditor, newProjectInEditor, saveAsInEditor, saveInEditor } from "./editor.ts";
 import { bundledAddonHashes, rememberAddons } from "./remember.ts";
-import { exportWeb, type ExportOptions, type ExportResult } from "./export.ts";
+import { exportProject, planExport, type ExportOptions, type ExportResult } from "./export.ts";
 import { collect, waitForOutcome, type BundledAddon, type DialogInfo, type MissingAddon, type Outcome } from "./observe.ts";
 import { EditorLoadError, LocalPool, type Lease, type TabSource, type TabStartup } from "./pool.ts";
 import { LivePreview, runPreview, type PreviewResult } from "./preview.ts";
 import { editorText, productNames, type EditorText } from "./lang.ts";
+import { waitForAccount } from "./login.ts";
 import { readProjectInfo, type ProjectInfo } from "./project.ts";
 import { exactRelease, releaseName, releaseNum, resolveBranch, type Branch, type Release } from "./release.ts";
 
@@ -40,6 +41,9 @@ export interface LaunchOptions {
   // The browser's language, which a fresh profile's editor takes as its own if C3 has it.
   // Default "en-US". c3cli works in any of the editor's languages.
   locale?: string;
+  // Log in with the session `c3cli login` saved (default true), unless `profile` has a login
+  // of its own. False: the editor stays logged out (free edition).
+  sharedSession?: boolean;
 }
 
 export interface OpenOptions {
@@ -99,8 +103,25 @@ export interface SaveReport {
   // What differs from the opened project; null for an in-place save.
   diff: SaveDiff | null;
   error?: string;
+  // Not saved on purpose: the free edition would have unbundled the project's addons.
+  refused?: "free-edition-unbundles-addons";
+  warnings?: string[];
 }
-export type ExportReport = Omit<ExportResult, "zipPath"> & { to: string; files: number | null };
+
+export interface SaveOptions {
+  timeoutMs?: number;
+  // Save a project that bundles its addons even in the free edition, which unbundles them
+  // (bundleAddons off, no addons/ folder). Refused by default.
+  allowUnbundle?: boolean;
+}
+export type ExportReport = Omit<ExportResult, "outputs"> & {
+  to: string;
+  // Files unzipped into a folder `to`; null for a zip.
+  files: number | null;
+  // Each zip the export made (by the editor's name) and where it went: the .zip `to`, the
+  // folder `to`, or with several zips a subfolder of `to` per zip.
+  outputs: { name: string; to: string }[];
+};
 
 export async function resolveRelease(opts: { release?: string; branch?: Branch }): Promise<Release> {
   return opts.release ? exactRelease(opts.release) : resolveBranch(opts.branch ?? "stable");
@@ -112,7 +133,7 @@ export class C3Editor {
   // A private browser with its own pool of editor tabs.
   static async launch(opts: LaunchOptions = {}): Promise<C3Editor> {
     const warm = opts.warm ? await resolveRelease(opts.warm) : undefined;
-    const pool = await LocalPool.launch({ profile: opts.profile, headed: opts.headed ?? false, tabs: opts.tabs ?? 1, warm, locale: opts.locale });
+    const pool = await LocalPool.launch({ profile: opts.profile, headed: opts.headed ?? false, tabs: opts.tabs ?? 1, warm, locale: opts.locale, sharedSession: opts.sharedSession });
     return new C3Editor(pool);
   }
 
@@ -164,6 +185,7 @@ export class C3Editor {
     }
 
     const { page } = lease;
+    notes.push(...(lease.startup.notes ?? []));
     try {
       let addons: AddonResult[] | undefined;
       if (extra) {
@@ -180,8 +202,12 @@ export class C3Editor {
         const hashes = await bundledAddonHashes(info.path, info.kind);
         if (hashes.length && await rememberAddons(page, hashes)) notes.push(`${hashes.length} bundled addon(s) trusted before opening (no install prompts)`);
       }
+      // A dialog that came up after the editor loaded (a late notice, or "Account logged out"
+      // when the shared session was refused) would swallow the drop.
+      const late = await dismissDialogs(page);
       const openedAt = Date.now();
       const root = await bridge.open(info.path, info.kind);
+      if (bridge.dropAttempts > 1) notes.push(`the editor took the project on drop ${bridge.dropAttempts} (it ignored the first)`);
       const result = await waitForOutcome(page, {
         projectName: info.name, assetUrl: release.assetUrl, timeoutMs, installBundledAddons: opts.installBundledAddons ?? true,
       });
@@ -192,7 +218,7 @@ export class C3Editor {
       if (outcome === "refused" && declined.length) outcome = "missing-addons";
       const report: OpenReport = {
         ...base, tab: lease.tabId, outcome, durationMs: Date.now() - openedAt,
-        startupDialogs: lease.startup.dialogs, startupPageErrors: lease.startup.pageErrors, startupConsoleErrors: lease.startup.consoleErrors,
+        startupDialogs: [...lease.startup.dialogs, ...late], startupPageErrors: lease.startup.pageErrors, startupConsoleErrors: lease.startup.consoleErrors,
         dialogs: result.dialogs,
         missingAddons: [
           // The project knows each addon's type; the dialog can't always tell (Chinese uses
@@ -255,7 +281,7 @@ export class C3Editor {
       await newProjectInEditor(page, text.t("main-menu.project-menu.new-tooltip"), name, productNames(text).map((p) => `${name} - ${p}`), timeoutMs);
       const { target, written } = await saveAsTo(page, bridge, text, dest, timeoutMs);
       const savedWithRelease = await savedWith(dest);
-      const info: ProjectInfo = { path: dest, kind, name, savedWithRelease: savedWithRelease ? releaseNum(savedWithRelease) : null, addonTypes: {} };
+      const info: ProjectInfo = { path: dest, kind, name, savedWithRelease: savedWithRelease ? releaseNum(savedWithRelease) : null, addonTypes: {}, bundleAddons: false };
       const report: OpenReport = {
         version: REPORT_VERSION, project: { path: dest, kind, name, savedWithRelease }, release: release.name, host: "hosted",
         tab: lease.tabId, outcome: "opened", durationMs: Date.now() - started,
@@ -307,16 +333,34 @@ export class OpenedProject {
     if (this.report.outcome !== "opened") throw new Error(`cannot ${what}: project did not open (${this.report.outcome})`);
   }
 
+  // The free edition saves bundleAddons as false and drops the addons/ folder: bundling is
+  // a paid feature (tasks/save-export.md). Refuse such a save unless allowed; null = go on.
+  private async unbundleCheck(dest: string, inPlace: boolean, opts: SaveOptions): Promise<{ refusal: SaveReport | null; warnings: string[] }> {
+    if (!this.info.bundleAddons) return { refusal: null, warnings: [] };
+    const account = await waitForAccount(this.page, 15_000, this.text!);
+    if (account.settled && account.edition === "paid") return { refusal: null, warnings: [] };
+    const who = account.loggedIn ? `the account ${account.name} has the free edition` : account.settled ? "the editor is logged out (free edition)" : "the editor's edition is unknown (account not checked yet)";
+    const what = "the free edition unbundles the project's addons on save (bundleAddons off, no addons/ folder)";
+    if (opts.allowUnbundle) return { refusal: null, warnings: [`saved anyway (allowUnbundle): ${what}, and ${who}`] };
+    return {
+      refusal: { to: dest, inPlace, ok: false, written: [], savedWithRelease: null, diff: null, refused: "free-edition-unbundles-addons",
+        error: `not saved: the project bundles its addons and ${who}; ${what}. Log in with a paid account, or allow it (--allow-unbundle)` },
+      warnings: [],
+    };
+  }
+
   // Save with the editor (Ctrl/Cmd+S), which only rewrites the files C3 considers changed.
   // Without `to`: in place, over the project's own files. With `to`: into a new folder (a
   // copy of the project, without .git, with the save on top) or a new .c3p, never
   // overwritten, and diffed with the project.
-  async save(to?: string, opts: { timeoutMs?: number } = {}): Promise<SaveReport> {
+  async save(to?: string, opts: SaveOptions = {}): Promise<SaveReport> {
     this.requireOpened("save");
     const root = this.location!, bridge = this.bridge!;
     const inPlace = to === undefined;
     const dest = inPlace ? root.path : path.resolve(to);
     if (!inPlace) await checkTarget(dest, root.kind);
+    const { refusal, warnings } = await this.unbundleCheck(dest, inPlace, opts);
+    if (refusal) return refusal;
     const before = await savedWith(root.path);
     const mirrored = !inPlace && root.kind === "folder";
     const existed = inPlace || (await exists(dest));
@@ -335,6 +379,7 @@ export class OpenedProject {
       return {
         to: dest, inPlace, ok: true, written, savedWithRelease: { before, after: await savedWith(dest) },
         diff: inPlace ? null : await diffProjects(root.path, dest, mirrored ? written : undefined),
+        ...(warnings.length ? { warnings } : {}),
       };
     } catch (e) {
       if (!existed) await rm(dest, { recursive: true, force: true }).catch(() => {});
@@ -346,10 +391,12 @@ export class OpenedProject {
   // single file), diffed with the opened project. Unlike save(), this writes every file
   // from the editor's memory: use it to see what C3 actually holds for the project.
   // Afterwards the editor's project is `to`, and save() writes there.
-  async saveAs(to: string, opts: { timeoutMs?: number } = {}): Promise<SaveReport> {
+  async saveAs(to: string, opts: SaveOptions = {}): Promise<SaveReport> {
     this.requireOpened("save as");
     const dest = path.resolve(to);
     await checkTarget(dest, targetKind(dest));
+    const { refusal, warnings } = await this.unbundleCheck(dest, false, opts);
+    if (refusal) return refusal;
     const before = await savedWith(this.info.path);
     try {
       const { target, written } = await saveAsTo(this.page, this.bridge!, this.text!, dest, opts.timeoutMs ?? 30_000);
@@ -358,6 +405,7 @@ export class OpenedProject {
       return {
         to: dest, inPlace: false, ok: true, written, savedWithRelease: { before, after: await savedWith(dest) },
         diff: await diffProjects(this.info.path, dest),
+        ...(warnings.length ? { warnings } : {}),
       };
     } catch (e) {
       return { to: dest, inPlace: false, ok: false, written: [], savedWithRelease: null, diff: null, error: (e as Error).message };
@@ -372,23 +420,35 @@ export class OpenedProject {
     if (this.location) this.location.writeTo = this.location.path;
   }
 
-  // Web (HTML5) export to a new .zip, or unzipped into a new/empty folder.
+  // Export for a platform (default web) to a new .zip, or unzipped into a new/empty folder.
+  // Unzipping keeps file modes, so executables stay executable. Every platform seen so far
+  // gives one zip (several architectures are folders inside it); should one offer several,
+  // `to` must be a folder and each zip goes into its own subfolder.
   async export(to: string, options: ExportOptions = {}, opts: { timeoutMs?: number } = {}): Promise<ExportReport> {
     this.requireOpened("export");
     const toPath = path.resolve(to);
-    await checkTarget(toPath, toPath.toLowerCase().endsWith(".zip") ? "zip" : "folder");
+    const asZip = toPath.toLowerCase().endsWith(".zip");
+    await checkTarget(toPath, asZip ? "zip" : "folder");
+    planExport(options.platform ?? "web", this.release, options); // bad options: throw before anything runs
     const tmp = await mkdtemp(path.join(os.tmpdir(), "c3cli-export-"));
     try {
-      const { zipPath, ...res } = await exportWeb(this.page, options, path.join(tmp, "export.zip"), opts.timeoutMs ?? 120_000, this.text!);
-      let files: number | null = null;
-      if (zipPath) {
-        if (toPath.toLowerCase().endsWith(".zip")) await moveFile(zipPath, toPath);
-        else {
-          const { unzipProject } = await import("./unzip.ts");
-          files = await unzipProject(zipPath, toPath);
-        }
+      const { outputs, ...res } = await exportProject(this.page, this.release, options, tmp, opts.timeoutMs ?? 120_000, this.text!);
+      const report: ExportReport = { ...res, to: toPath, files: null, outputs: [] };
+      if (res.outcome !== "exported") return report;
+      if (asZip) {
+        if (outputs.length > 1) return { ...report, outcome: "export-failed", error: `the export made ${outputs.length} zips (${outputs.map((o) => o.name).join(", ")}): give a folder to export into` };
+        await moveFile(outputs[0].file, toPath);
+        return { ...report, outputs: [{ name: outputs[0].name, to: toPath }] };
       }
-      return { ...res, to: toPath, files };
+      const { unzipProject } = await import("./unzip.ts");
+      await mkdir(toPath, { recursive: true });
+      let files = 0;
+      for (const o of outputs) {
+        const dest = outputs.length > 1 ? path.join(toPath, o.name.replace(/\.zip$/i, "")) : toPath;
+        files += await unzipProject(o.file, dest);
+        report.outputs.push({ name: o.name, to: dest });
+      }
+      return { ...report, files };
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }

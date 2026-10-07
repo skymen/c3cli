@@ -9,7 +9,8 @@ It uses the real hosted editor (editor.construct.net) in a headless Chromium.
   rewrote.
 - **new**: create a new project with the editor, as a scaffold.
 - **preview**: run the project (or one layout) and collect runtime errors.
-- **export**: Web (HTML5) export to a zip or a folder.
+- **export**: export to a zip or a folder, for the web, Android and iOS (Cordova project),
+  Windows, macOS, Linux, NW.js (LTS) or Playable Ads, with each platform's options.
 - **addons install** / `--addons`: install addons a project uses but doesn't bundle.
 - A **daemon** that keeps warm editor tabs, and a **Node library** to script previews
   (run code on the runtime, send input, take screenshots).
@@ -43,7 +44,7 @@ c3cli open    <folder|.c3p> [--report json]
 c3cli save    <folder|.c3p>                                # open, save with the editor, in place
 c3cli save    <folder|.c3p> --to <new folder|new .c3p>   # open, save into a copy, diff with the input
 c3cli preview <folder|.c3p> [--seconds 10] [--layout "Level 1"]
-c3cli export  <folder|.c3p> --to <new .zip|new folder> [--minify none|bundle|simple|advanced] [--offline]
+c3cli export  <folder|.c3p> --to <new .zip|new folder> [--platform windows|macos|linux|android|…] [--set arch=x64]…
 c3cli new     <new folder|new .c3p> [--name "Pong"]
 c3cli addons install <.c3addon|folder|zip>... --profile <dir>   # or into the running daemon
 ```
@@ -66,7 +67,8 @@ Common options:
 | `--report json` | A machine-readable report on stdout |
 | `--timeout <s>` | Give up after this long (default 60) |
 | `--headed` | Show the browser window; `--keep-open` leaves it open |
-| `--profile <dir>` | Use and keep this browser profile (logins live there); default: a fresh one per run |
+| `--profile <dir>` | Use and keep this browser profile; default: a fresh one per run |
+| `--guest` | Stay logged out (by default runs use the login saved by `c3cli login`) |
 | `--no-install-bundled-addons` | Don't install the addons bundled in the project. By default c3cli trusts them before opening, so the editor installs them without asking |
 | `--addons <path>` | Install these addons first (`.c3addon`, a folder of them, a zip) |
 
@@ -80,7 +82,7 @@ Exit codes:
 |---|---|
 | 0 | Clean |
 | 1 | Opened, with warnings (dialogs after opening, page errors, runtime errors in preview) |
-| 2 | Refused (invalid project, newer release, missing addons, name collision, free-edition limit, login failed) |
+| 2 | Refused (invalid project, newer release, missing addons, name collision, free-edition limit, a save that would unbundle addons, login failed) |
 | 3 | Crashed, timed out, editor error, or the preview, save or export didn't happen |
 | 4 | Tool error |
 
@@ -101,14 +103,23 @@ c3cli daemon stop
 
 ## Accounts
 
-Guests and free accounts are limited (25 and 50 events), which mostly matters for export.
-Log in once into a profile, then pass that profile to other commands:
+Guests and free accounts are limited (25 and 50 events), which mostly matters for export,
+and saving a project that bundles its addons needs a paid account. Log in once; every run
+after that is logged in, the daemon included:
 
 ```sh
-c3cli login  --profile ~/.config/c3cli/me    # reads C3CLI_USERNAME / C3CLI_PASSWORD, or asks (hidden)
-c3cli whoami --profile ~/.config/c3cli/me
-c3cli export game.c3p --to out.zip --profile ~/.config/c3cli/me
+c3cli login                       # reads C3CLI_USERNAME / C3CLI_PASSWORD, or asks (hidden)
+c3cli whoami
+c3cli export game.c3p --to out.zip
+c3cli logout                      # ends the session, on Construct's server too
 ```
+
+c3cli keeps the session, never the password, in the OS credential store: the macOS
+keychain, the Windows Credential Manager, or the Linux Secret Service (without one, as on a
+server, `~/.config/c3cli/session.json`, readable by you only). That keeps it off disk in plain text
+and out of backups, but any program running as you can still read it. `--guest` runs one
+command logged out. `login --profile <dir>` logs one profile in on its own instead, and
+that profile keeps its own account.
 
 Only email or username with a password is supported, no Google or other sign-ins. There is
 no `--password` flag, so the password never ends up in shell history. Use a dedicated

@@ -40,7 +40,8 @@ export async function launch(opts: { profile?: string; headed: boolean; cdp?: bo
     context, page, cdpUrl,
     close: async () => {
       await context.close();
-      if (temp) await rm(temp, { recursive: true, force: true });
+      // Chromium can still be writing its cache as it exits.
+      if (temp) await rm(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     },
   };
 }
@@ -65,7 +66,8 @@ export async function dismissDialogs(page: Page): Promise<string[]> {
     if (id === null) break;
     dismissed.push(id);
     await page.keyboard.press("Escape");
-    await page.waitForTimeout(300);
+    // A dialog that ignores Escape gets up to a second before the next try.
+    await page.waitForFunction((id) => !document.querySelector(`dialog[open]#${CSS.escape(id)}`), id, { timeout: 1000, polling: "raf" }).catch(() => {});
   }
   return dismissed;
 }
@@ -76,53 +78,56 @@ async function waitForProgress(page: Page, timeoutMs = 60_000) {
   await page.waitForFunction(() => !document.querySelector("#progressDialog[open]"), null, { timeout: timeoutMs, polling: 250 }).catch(() => {});
 }
 
-// Click Menu → <item>, a top-level item picked by its title attribute (Settings…).
-export async function clickMainMenuItem(page: Page, title: string): Promise<void> {
+// A menu entry: by its title attribute (its tooltip), by the text it shows (a submenu's
+// label, or an item without a title), or the first submenu of the main menu (Project).
+type MenuEntry = { title: string } | { label: string } | { firstSubmenu: true };
+
+// Click a menu entry as soon as it's shown. The click itself waits out any animation (a
+// click during one is silently dropped), so there's no fixed sleep.
+async function clickMenuEntry(page: Page, entry: MenuEntry, where: string): Promise<void> {
+  const shown = await page.waitForFunction((m) => [...document.querySelectorAll("ui-menuitem")].find((e) => {
+    const el = e as HTMLElement;
+    if (!el.offsetParent) return false;
+    if ("title" in m) return el.getAttribute("title") === m.title;
+    if ("label" in m) return el.innerText.trim().split("\n")[0] === m.label;
+    return el.hasAttribute("sub-menu");
+  }) ?? null, entry, { timeout: 5000, polling: "raf" })
+    .catch(() => { throw new Error(`no ${"title" in entry ? `"${entry.title}"` : "label" in entry ? `"${entry.label}"` : "submenu"} in ${where}`); });
+  await shown.asElement()!.click();
+}
+
+async function openMainMenu(page: Page) {
   await waitForProgress(page);
   await page.click("#mainMenuButton");
-  await page.waitForTimeout(300);
-  await page.locator(`ui-menuitem[title="${title}"]`).click();
+}
+
+// Click Menu → <item>, a top-level item picked by its title attribute (Settings…).
+export async function clickMainMenuItem(page: Page, title: string): Promise<void> {
+  await openMainMenu(page);
+  await clickMenuEntry(page, { title }, "the main menu");
 }
 
 // Click Menu → Project → <item>, the item picked by its title attribute.
 export async function clickProjectMenuItem(page: Page, title: string): Promise<void> {
-  await waitForProgress(page);
-  await page.click("#mainMenuButton");
-  await page.locator("ui-menuitem[sub-menu]").first().click();
-  // The submenu animates in; a click during the animation is silently dropped.
-  await page.waitForTimeout(500);
-  await page.locator(`ui-menuitem[title="${title}"]`).click();
+  await openMainMenu(page);
+  await clickMenuEntry(page, { firstSubmenu: true }, "the main menu");
+  await clickMenuEntry(page, { title }, "the Project menu");
 }
 
 // Click Menu → Project → <submenu> → <item>, the submenu by its label and the item by title.
 export async function clickProjectSubmenuItem(page: Page, submenu: string, title: string): Promise<void> {
-  await waitForProgress(page);
-  await page.click("#mainMenuButton");
-  await page.locator("ui-menuitem[sub-menu]").first().click();
-  await page.waitForTimeout(500);
-  const labels = await page.locator("ui-menuitem[sub-menu]").evaluateAll((els) =>
-    els.map((e) => ((e as HTMLElement).offsetParent ? (e as HTMLElement).innerText.trim().split("\n")[0] : "")));
-  const index = labels.indexOf(submenu);
-  if (index < 0) throw new Error(`no "${submenu}" submenu in the Project menu`);
-  await page.locator("ui-menuitem[sub-menu]").nth(index).click();
-  await page.waitForTimeout(500);
-  await page.locator(`ui-menuitem[title="${title}"]`).click();
+  await openMainMenu(page);
+  await clickMenuEntry(page, { firstSubmenu: true }, "the main menu");
+  await clickMenuEntry(page, { label: submenu }, "the Project menu");
+  await clickMenuEntry(page, { title }, `the ${submenu} menu`);
 }
 
 // Click Menu → <submenu> → <item>, both picked by the text they show (View → Addon manager,
-// whose items have no title). Each entry is clicked once it's shown; the click itself waits
-// out any animation (a click during one is silently dropped).
+// whose items have no title).
 export async function clickMainSubmenuItem(page: Page, submenu: string, item: string): Promise<void> {
-  const clickLabel = async (label: string, where: string) => {
-    const entry = await page.waitForFunction((l) => [...document.querySelectorAll("ui-menuitem")]
-      .find((e) => (e as HTMLElement).offsetParent && (e as HTMLElement).innerText.trim().split("\n")[0] === l) ?? null, label, { timeout: 5000, polling: "raf" })
-      .catch(() => { throw new Error(`no "${label}" in ${where}`); });
-    await entry.asElement()!.click();
-  };
-  await waitForProgress(page);
-  await page.click("#mainMenuButton");
-  await clickLabel(submenu, "the main menu");
-  await clickLabel(item, `the ${submenu} menu`);
+  await openMainMenu(page);
+  await clickMenuEntry(page, { label: submenu }, "the main menu");
+  await clickMenuEntry(page, { label: item }, `the ${submenu} menu`);
 }
 
 export async function listFiles(dir: string, base = dir): Promise<string[]> {

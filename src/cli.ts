@@ -5,14 +5,15 @@ import { createInterface } from "node:readline/promises";
 import path from "node:path";
 import { C3Editor, REPORT_VERSION, checkTarget, resolveRelease, type AddonResult, type ExportReport, type SaveReport } from "./api.ts";
 import { DEFAULT_SOCKET, DaemonSource, daemonStatus, runDaemon, startDaemon, stopDaemon } from "./daemon.ts";
-import { launch, loadEditor } from "./editor.ts";
-import { LOSSLESS_FORMATS, LOSSY_FORMATS, MINIFY_MODES, type ExportOptions } from "./export.ts";
+import { dismissDialogs, launch, loadEditor } from "./editor.ts";
+import { LOSSLESS_FORMATS, LOSSY_FORMATS, MINIFY_MODES, PLATFORM_NAMES, PLATFORM_SETTINGS, parseSettings, planExport, type ExportOptions, type Platform } from "./export.ts";
 import { editorText } from "./lang.ts";
-import { isLoggedIn, logIn, waitForAccount } from "./login.ts";
+import { isLoggedIn, logIn, logOut, waitForAccount, type Account } from "./login.ts";
 import type { Outcome } from "./observe.ts";
 import type { PreviewResult } from "./preview.ts";
 import { readProjectInfo } from "./project.ts";
 import { exactRelease, releaseName, resolveBranch, type Branch, type Release } from "./release.ts";
+import { SharedSession, accountStorage, harvestLogin, hasMarker, removeMarker, sessionStore, withSessionLock } from "./session.ts";
 
 const EXIT = { clean: 0, warnings: 1, refused: 2, crashed: 3, toolError: 4 } as const;
 
@@ -28,6 +29,7 @@ interface OpenOpts {
   installBundledAddons: boolean;
   addons: string[];
   daemon: boolean;
+  guest: boolean;
 }
 
 const collect = (v: string, prev: string[]) => [...prev, v];
@@ -48,6 +50,7 @@ function withOpenOptions(cmd: Command): Command {
   .option("--no-install-bundled-addons", "don't install the addons bundled in the project (by default they're trusted and installed, without prompts)")
   .option("--addons <path>", "install these addons first (.c3addon, a folder of them, or a zip; repeatable); they stay in the profile (the daemon's, with the daemon)", collect, [])
   .option("--keep-open", "leave the editor open until the window is closed (implies --headed)", false)
+  .option("--guest", "stay logged out: don't use the session saved by `c3cli login`", false)
   .option("--no-daemon", "use a private browser even if the daemon is running");
 }
 
@@ -70,22 +73,30 @@ withOpenOptions(program.command("preview").description("Open a project, preview 
   .option("--layout <name>", "preview this layout directly (like \"Preview layout\" in the editor) instead of the whole project")
   .action((projectPath: string, opts: OpenOpts & { seconds: number; layout?: string }) => guarded(opts, () => runCommand(projectPath, opts, { kind: "preview", seconds: opts.seconds, layout: opts.layout })));
 
-withOpenOptions(program.command("export").description("Open a project and export it for the web (HTML5), as a zip or unzipped into a folder"))
+withOpenOptions(program.command("export").description("Open a project and export it (web by default, or --platform), as a zip or unzipped into a folder"))
   .requiredOption("--to <path>", "a new .zip file, or a new/empty folder to unzip the export into (never overwritten)")
+  .addOption(new Option("--platform <name>", "what to export for").choices(PLATFORM_NAMES).default("web"))
+  .option("--set <name=value>", "a platform option (repeatable), e.g. --set arch=x64 --set bundle=single-file; see the list below", collect, [])
+  .option("--accept-warnings", "go on past the editor's warnings before exporting (otherwise they stop it)", false)
   .addOption(new Option("--minify <mode>", "script minify mode").choices(MINIFY_MODES))
   .addOption(new Option("--lossless <format>", "lossless image format").choices(LOSSLESS_FORMATS))
   .addOption(new Option("--lossy <format>", "lossy image format").choices(LOSSY_FORMATS))
-  .option("--offline", "turn offline support on")
-  .option("--no-offline", "turn offline support off")
-  .action((projectPath: string, opts: OpenOpts & ExportOptions & { to: string }) => guarded(opts, () => runCommand(projectPath, opts, {
-    kind: "export", to: opts.to, options: { minify: opts.minify, lossless: opts.lossless, lossy: opts.lossy, offline: opts.offline },
+  .option("--offline", "turn offline support on (web)")
+  .option("--no-offline", "turn offline support off (web)")
+  .addHelpText("after", `\nPlatform options (--set name=value; on/off for switches):\n${PLATFORM_NAMES.filter((p) => Object.keys(PLATFORM_SETTINGS[p]).length).map((p) => `  ${p}:\n${Object.entries(PLATFORM_SETTINGS[p]).map(([k, d]) => `    ${k}: ${d.help}`).join("\n")}`).join("\n")}\n  every platform: deduplicate-images, optimize-images (on/off)`)
+  .action((projectPath: string, opts: OpenOpts & ExportOptions & { to: string; platform: Platform; set: string[]; acceptWarnings: boolean }) => guarded(opts, () => runCommand(projectPath, opts, {
+    kind: "export", to: opts.to, options: {
+      platform: opts.platform, minify: opts.minify, lossless: opts.lossless, lossy: opts.lossy, offline: opts.offline,
+      settings: parseSettings(opts.set), acceptWarnings: opts.acceptWarnings,
+    },
   })));
 
 withOpenOptions(program.command("save").description("Open a project and save it with the editor (Ctrl+S): in place, or into --to and diffed with the input"))
   .option("--to <path>", "write the saved project here instead of over the input: a new folder for folder projects, a new .c3p for .c3p projects (never overwritten)")
-  .action((projectPath: string, opts: OpenOpts & { to?: string }) => guarded(opts, () => runCommand(projectPath, opts, { kind: "save", to: opts.to })));
+  .option("--allow-unbundle", "save a project that bundles its addons even in the free edition, which unbundles them (refused by default)", false)
+  .action((projectPath: string, opts: OpenOpts & { to?: string; allowUnbundle: boolean }) => guarded(opts, () => runCommand(projectPath, opts, { kind: "save", to: opts.to, allowUnbundle: opts.allowUnbundle })));
 
-interface NewOpts { name?: string; branch: Branch; release?: string; report?: "json"; timeout: number; headed: boolean; profile?: string; daemon: boolean }
+interface NewOpts { name?: string; branch: Branch; release?: string; report?: "json"; timeout: number; headed: boolean; profile?: string; daemon: boolean; guest: boolean }
 
 program.command("new").description("Create a new project with the editor (Project → New, the release's defaults) and save it: a scaffold")
   .argument("<path>", "a new or empty folder, or a new .c3p (never overwritten)")
@@ -96,6 +107,7 @@ program.command("new").description("Create a new project with the editor (Projec
   .option("--timeout <seconds>", "give up after this long", (v) => Number(v), 60)
   .option("--headed", "show the browser window", false)
   .option("--profile <dir>", "use (and keep) this browser profile; default: a fresh temporary profile per run")
+  .option("--guest", "stay logged out: don't use the session saved by `c3cli login`", false)
   .option("--no-daemon", "use a private browser even if the daemon is running")
   .action((to: string, opts: NewOpts) => guarded(opts as unknown as OpenOpts, () => newCommand(to, opts)));
 
@@ -119,13 +131,13 @@ async function newCommand(to: string, opts: NewOpts): Promise<number> {
   }
 }
 
-type Then = { kind: "save"; to?: string } | { kind: "preview"; seconds: number; layout?: string } | { kind: "export"; to: string; options: ExportOptions };
+type Then = { kind: "save"; to?: string; allowUnbundle: boolean } | { kind: "preview"; seconds: number; layout?: string } | { kind: "export"; to: string; options: ExportOptions };
 
-interface AccountOpts { profile: string; branch: Branch; release?: string; timeout: number; headed: boolean; report?: "json" }
+interface AccountOpts { profile?: string; branch: Branch; release?: string; timeout: number; headed: boolean; report?: "json" }
 
 function withAccountOptions(cmd: Command): Command {
   return cmd
-    .requiredOption("--profile <dir>", "browser profile that keeps the session")
+    .option("--profile <dir>", "this browser profile's own login instead of the shared one (kept in the OS keychain, used by every run)")
     .addOption(new Option("--branch <branch>", "editor branch").choices(["stable", "beta", "lts"]).default("stable"))
     .option("--release <rNNN>", "exact editor release (overrides --branch)")
     .addOption(new Option("--report <format>", "machine-readable report on stdout").choices(["json"]))
@@ -133,10 +145,13 @@ function withAccountOptions(cmd: Command): Command {
     .option("--headed", "show the browser window", false);
 }
 
-withAccountOptions(program.command("login").description("Log in with username/email + password (no OAuth) and keep the session in --profile. Reads C3CLI_USERNAME / C3CLI_PASSWORD, or asks (password hidden)"))
+withAccountOptions(program.command("login").description("Log in with username/email + password (no OAuth). The session (never the password) is kept in the OS keychain and used by every c3cli run; with --profile, in that profile only. Logs out first if logged in as someone else. Reads C3CLI_USERNAME / C3CLI_PASSWORD, or asks (password hidden)"))
   .action((opts: AccountOpts) => guarded(opts as OpenOpts, () => loginCommand(opts)));
 
-withAccountOptions(program.command("whoami").description("Show which account the editor is logged in to with --profile"))
+withAccountOptions(program.command("logout").description("Log out: ends the shared session (on Construct's server too) and removes it from the keychain; with --profile, that profile's own login"))
+  .action((opts: AccountOpts) => guarded(opts as OpenOpts, () => logoutCommand(opts)));
+
+withAccountOptions(program.command("whoami").description("Show which account c3cli runs are logged in to (the shared session, or --profile's)"))
   .action((opts: AccountOpts) => guarded(opts as OpenOpts, () => whoamiCommand(opts)));
 
 const addonsCmd = program.command("addons").description("Manage the addons installed in a browser profile");
@@ -157,7 +172,7 @@ addonsCmd.command("install").description("Install addons into a browser profile 
     // A temporary profile would lose them on exit: a real profile, or the daemon's.
     const source = !opts.profile && opts.daemon && !opts.headed ? await DaemonSource.connect().catch(() => null) : null;
     if (!source && !opts.profile) throw new Error("addons live in the browser profile: pass --profile <dir>, or start the daemon to install into its profile");
-    const editor = source ? C3Editor.fromSource(source) : await C3Editor.launch({ profile: opts.profile, headed: opts.headed });
+    const editor = source ? C3Editor.fromSource(source) : await C3Editor.launch({ profile: opts.profile, headed: opts.headed, sharedSession: false });
     try {
       const results = await editor.installAddons(paths, { release: release.name, timeoutMs: opts.timeout * 1000 });
       const into = source ? "daemon" : path.resolve(opts.profile!);
@@ -173,7 +188,7 @@ addonsCmd.command("install").description("Install addons into a browser profile 
 
 const daemon = program.command("daemon").description("Keep a warm editor running in the background, shared by every c3cli command");
 
-interface DaemonOpts { tabs: number; profile?: string; branch: Branch; release?: string; headed: boolean; report?: "json" }
+interface DaemonOpts { tabs: number; profile?: string; branch: Branch; release?: string; headed: boolean; report?: "json"; guest: boolean }
 
 function withDaemonOptions(cmd: Command): Command {
   return cmd
@@ -181,6 +196,7 @@ function withDaemonOptions(cmd: Command): Command {
     .option("--profile <dir>", "browser profile for all tabs (logins live here); default: a temporary one")
     .addOption(new Option("--branch <branch>", "release to warm the tabs with").choices(["stable", "beta", "lts"]).default("stable"))
     .option("--release <rNNN>", "exact release to warm the tabs with (overrides --branch)")
+    .option("--guest", "keep the tabs logged out: don't use the session saved by `c3cli login`", false)
     .option("--headed", "show the browser window", false);
 }
 
@@ -192,6 +208,7 @@ withDaemonOptions(daemon.command("start").description("Start the daemon in the b
     if (opts.release) args.push("--release", opts.release);
     if (opts.profile) args.push("--profile", path.resolve(opts.profile));
     if (opts.headed) args.push("--headed");
+    if (opts.guest) args.push("--guest");
     printStatus(await startDaemon(args, DEFAULT_SOCKET), "started");
     return EXIT.clean;
   }));
@@ -199,7 +216,7 @@ withDaemonOptions(daemon.command("start").description("Start the daemon in the b
 withDaemonOptions(daemon.command("run").description("Run the daemon in the foreground (what `start` launches)"))
   .action((opts: DaemonOpts) => guarded(opts as unknown as OpenOpts, async () => {
     const warm = await resolveRelease(opts);
-    await runDaemon({ socket: DEFAULT_SOCKET, tabs: opts.tabs, profile: opts.profile, headed: opts.headed, warm });
+    await runDaemon({ socket: DEFAULT_SOCKET, tabs: opts.tabs, profile: opts.profile, headed: opts.headed, warm, guest: opts.guest });
     await new Promise(() => {}); // runs until stopped
     return EXIT.clean;
   }));
@@ -220,8 +237,8 @@ daemon.command("stop").description("Stop the daemon")
     return EXIT.clean;
   }));
 
-function printStatus(s: { pid: number; startedAt: string; profile: string; tabs: { id: string; busy: boolean; release: string | null }[] }, state: string) {
-  console.log(`daemon ${state} (pid ${s.pid}, since ${s.startedAt}), profile ${s.profile}`);
+function printStatus(s: { pid: number; startedAt: string; profile: string; sharedSession?: string | null; tabs: { id: string; busy: boolean; release: string | null }[] }, state: string) {
+  console.log(`daemon ${state} (pid ${s.pid}, since ${s.startedAt}), profile ${s.profile}${s.sharedSession ? `, shared session ${s.sharedSession}` : ""}`);
   for (const t of s.tabs) console.log(`  ${t.id}: ${t.busy ? "busy" : "free"}${t.release ? `, ${t.release}` : ""}`);
 }
 
@@ -230,18 +247,86 @@ async function loginCommand(opts: AccountOpts): Promise<number> {
   const password = process.env.C3CLI_PASSWORD || (await ask("Password (hidden): ", true));
   if (!username || !password) throw new Error("no credentials: set C3CLI_USERNAME and C3CLI_PASSWORD, or run at a terminal to be asked");
   const release = opts.release ? exactRelease(opts.release) : await resolveBranch(opts.branch);
+  const store = await sessionStore();
   const session = await launch({ profile: opts.profile, headed: opts.headed });
   try {
+    if (opts.profile) {
+      // From now on the profile's own login. A copy of the shared session isn't one.
+      if (await hasMarker(opts.profile)) {
+        await accountStorage(session.context, "delete");
+        await removeMarker(opts.profile);
+      }
+    } else {
+      // Logged in with the stored session first, logIn() sees whether it's already this
+      // account, or logs it out (which ends it on the server).
+      await SharedSession.attach(session.context, null);
+    }
     await loadEditor(session.page, release, opts.timeout * 1000);
     const r = await logIn(session.page, username, password, opts.timeout * 1000, await editorText(session.page, release.assetUrl));
-    const report = { version: REPORT_VERSION, release: release.name, profile: path.resolve(opts.profile), ...r };
+    let error = r.error;
+    let stored: string | undefined;
+    if (!opts.profile) {
+      if (r.outcome === "logged-in") {
+        const s = await harvestLogin(session.context, r.account.name);
+        if (s) { await withSessionLock(store.lockPath, () => store.set(s)); stored = store.where; }
+        else error = "logged in, but the editor kept no session to save (\"Keep me logged in\")";
+      } else if (r.outcome === "already-logged-in") stored = store.where;
+      else if (r.loggedOut) await withSessionLock(store.lockPath, () => store.delete()); // ended on the server
+    }
+    const outcome = error && r.outcome === "logged-in" ? "login-failed" : r.outcome;
+    const report = {
+      version: REPORT_VERSION, release: release.name, profile: opts.profile ? path.resolve(opts.profile) : null,
+      ...r, outcome, ...(error ? { error } : {}), ...(stored ? { storedIn: stored } : {}),
+    };
     if (opts.report === "json") console.log(JSON.stringify(report, null, 2));
     else {
-      console.log(`${r.outcome}  ${r.account.name || "?"} (${r.account.edition} edition)`);
+      console.log(`${outcome}  ${r.account.name || "?"} (${r.account.edition} edition)${r.loggedOut && r.loggedOut !== r.account.name ? `, was ${r.loggedOut}` : ""}`);
+      if (stored) console.log(`  session kept in ${stored}`);
       if (r.dialog) console.log(`  dialog ${r.dialog.id}: ${r.dialog.text}`);
-      if (r.error) console.log(`  error: ${r.error}`);
+      if (error) console.log(`  error: ${error}`);
     }
-    return r.outcome === "login-failed" ? EXIT.refused : EXIT.clean;
+    return outcome === "login-failed" ? EXIT.refused : EXIT.clean;
+  } finally {
+    await session.close();
+  }
+}
+
+async function logoutCommand(opts: AccountOpts): Promise<number> {
+  const release = opts.release ? exactRelease(opts.release) : await resolveBranch(opts.branch);
+  const store = await sessionStore();
+  const print = (report: { outcome: string; from?: string; serverDropped?: boolean; error?: string; note?: string }) => {
+    if (opts.report === "json") console.log(JSON.stringify({ version: REPORT_VERSION, profile: opts.profile ? path.resolve(opts.profile) : null, ...report }, null, 2));
+    else {
+      console.log(`${report.outcome}${report.from ? `  ${report.from}` : ""}${report.serverDropped === false ? " (the server didn't confirm it ended the session)" : ""}`);
+      if (report.note) console.log(`  note: ${report.note}`);
+      if (report.error) console.log(`  error: ${report.error}`);
+    }
+  };
+  if (!opts.profile && !(await store.get())) { print({ outcome: "not-logged-in", note: "no shared session saved" }); return EXIT.clean; }
+  const session = await launch({ profile: opts.profile, headed: opts.headed });
+  try {
+    if (opts.profile && (await hasMarker(opts.profile))) {
+      // Only a copy of the shared session: drop it here, but don't end it for every run.
+      await accountStorage(session.context, "delete");
+      await removeMarker(opts.profile);
+      print({ outcome: "not-logged-in", note: "this profile only used the shared session, which stays logged in (c3cli logout without --profile ends it)" });
+      return EXIT.clean;
+    }
+    if (!opts.profile) await SharedSession.attach(session.context, null);
+    await loadEditor(session.page, release, opts.timeout * 1000);
+    const text = await editorText(session.page, release.assetUrl);
+    const r = await logOut(session.page, opts.timeout * 1000, text);
+    if (!opts.profile) {
+      // Gone either way: logged out now, or refused as expired while the editor loaded.
+      await withSessionLock(store.lockPath, () => store.delete());
+      if (r.outcome === "not-logged-in") {
+        await dismissDialogs(session.page);
+        print({ outcome: "not-logged-in", note: "the saved session had already expired; removed it" });
+        return EXIT.clean;
+      }
+    }
+    print(r);
+    return r.outcome === "logout-failed" ? EXIT.refused : EXIT.clean;
   } finally {
     await session.close();
   }
@@ -251,10 +336,20 @@ async function whoamiCommand(opts: AccountOpts): Promise<number> {
   const release = opts.release ? exactRelease(opts.release) : await resolveBranch(opts.branch);
   const session = await launch({ profile: opts.profile, headed: opts.headed });
   try {
+    const notes: string[] = [];
+    // Whatever another run would be logged in as: the profile's own login, else the shared one.
+    const shared = await SharedSession.attach(session.context, opts.profile ?? null, notes);
     await loadEditor(session.page, release, opts.timeout * 1000);
-    const account = await waitForAccount(session.page, 15_000, await editorText(session.page, release.assetUrl));
-    if (opts.report === "json") console.log(JSON.stringify({ version: REPORT_VERSION, ...account }, null, 2));
-    else console.log(isLoggedIn(account) ? `${account.name} (${account.edition} edition)` : "not logged in (guest, free edition)");
+    // Settled = the login frame answered: logged in, skipped (nothing saved) or refused.
+    const account: Account = await waitForAccount(session.page, 15_000, await editorText(session.page, release.assetUrl));
+    notes.push(...(shared?.drainNotes() ?? []));
+    const login = !isLoggedIn(account) ? null : shared ? "shared" : "profile";
+    const where = login === "shared" ? shared!.store.where : login === "profile" ? path.resolve(opts.profile!) : null;
+    if (opts.report === "json") console.log(JSON.stringify({ version: REPORT_VERSION, ...account, login, where, notes }, null, 2));
+    else {
+      console.log(isLoggedIn(account) ? `${account.name} (${account.edition} edition), ${login === "shared" ? `shared session from ${where}` : `this profile's own login`}` : "not logged in (guest, free edition)");
+      for (const n of notes) console.log(`  note: ${n}`);
+    }
     return isLoggedIn(account) ? EXIT.clean : EXIT.refused;
   } finally {
     await session.close();
@@ -306,6 +401,8 @@ async function runCommand(projectPath: string, opts: OpenOpts, then?: Then): Pro
   const notes: string[] = [];
   let release = await resolveRelease(opts);
   release = await maybeUseProjectRelease(release, info.savedWithRelease, opts, notes);
+  // Bad export options fail now, not after opening the project.
+  if (then?.kind === "export") planExport(then.options.platform ?? "web", release, then.options);
 
   const started = Date.now();
   const { editor, via } = await getEditor(opts);
@@ -322,7 +419,7 @@ async function runCommand(projectPath: string, opts: OpenOpts, then?: Then): Pro
 
       let save: SaveReport | undefined;
       if (then?.kind === "save") {
-        save = opened ? await project.save(then.to, { timeoutMs: Math.max(10_000, timeoutMs / 2) })
+        save = opened ? await project.save(then.to, { timeoutMs: Math.max(10_000, timeoutMs / 2), allowUnbundle: then.allowUnbundle })
           : { to: path.resolve(then.to ?? projectPath), inPlace: !then.to, ok: false, written: [], savedWithRelease: null, diff: null, error: `not saved: ${notOpened}` };
       }
       let preview: PreviewResult | undefined;
@@ -333,7 +430,7 @@ async function runCommand(projectPath: string, opts: OpenOpts, then?: Then): Pro
       let exported: ExportReport | undefined;
       if (then?.kind === "export") {
         exported = opened ? await project.export(then.to, then.options, { timeoutMs })
-          : { outcome: "export-failed", to: path.resolve(then.to), files: null, suggestedName: null, reportText: null, dialogs: [], error: `not exported: ${notOpened}` };
+          : { outcome: "export-failed", platform: then.options.platform ?? "web", to: path.resolve(then.to), files: null, outputs: [], suggestedName: null, reportText: null, dialogs: [], warnings: [], error: `not exported: ${notOpened}` };
       }
 
       const report = {
@@ -358,15 +455,16 @@ async function runCommand(projectPath: string, opts: OpenOpts, then?: Then): Pro
       const noisy = report.dialogs.length + report.pageErrors.length > 0;
       if (exported) {
         if (!opened) return exitCode(outcome, true);
-        if (exported.outcome === "refused-by-edition") return EXIT.refused;
+        if (exported.outcome === "refused-by-edition" || exported.outcome === "refused") return EXIT.refused;
         if (exported.outcome !== "exported") return EXIT.crashed;
-        return exitCode(outcome, noisy);
+        return exitCode(outcome, noisy || exported.warnings.length > 0);
       }
       if (preview) {
         if (!opened) return exitCode(outcome, true);
         if (!preview.started || preview.error) return EXIT.crashed;
         return preview.pageErrors.length + preview.consoleErrors.length ? EXIT.warnings : EXIT.clean;
       }
+      if (save?.refused) return EXIT.refused;
       if (save && !save.ok) return opened ? EXIT.crashed : exitCode(outcome, true);
       return exitCode(outcome as Outcome, noisy);
     } finally {
@@ -380,12 +478,12 @@ async function runCommand(projectPath: string, opts: OpenOpts, then?: Then): Pro
 // The daemon's warm editor when it's running, unless this run needs its own browser
 // (a specific profile, a visible window, or --no-daemon).
 async function getEditor(opts: OpenOpts): Promise<{ editor: C3Editor; via: "daemon" | "local" }> {
-  const ownBrowser = !opts.daemon || opts.profile || opts.headed || opts.keepOpen;
+  const ownBrowser = !opts.daemon || opts.profile || opts.headed || opts.keepOpen || opts.guest;
   if (!ownBrowser) {
     const source = await DaemonSource.connect().catch(() => null);
     if (source) return { editor: C3Editor.fromSource(source), via: "daemon" };
   }
-  return { editor: await C3Editor.launch({ profile: opts.profile, headed: opts.headed || opts.keepOpen }), via: "local" };
+  return { editor: await C3Editor.launch({ profile: opts.profile, headed: opts.headed || opts.keepOpen, sharedSession: !opts.guest }), via: "local" };
 }
 
 // --use-project-release: exactly the release the project was saved with, older or newer.
@@ -421,7 +519,7 @@ function exitCode(outcome: Outcome, hadNoise: boolean): number {
   }
 }
 
-function printHuman(r: { addons?: AddonResult[]; via?: string; tab?: string; error?: string; export?: { outcome: string; to: string; files: number | null; reportText: string | null; dialogs: { id: string; text: string }[]; error?: string }; startupPageErrors: string[]; preview?: PreviewResult; save?: SaveReport; outcome: string; project: { name: string | null; path: string }; release: string; durationMs: number; dialogs: { id: string; langKey: string | null; title: string; body: string }[]; missingAddons: { type: string; id: string }[]; bundledAddons: { name: string | null; version: string | null; installed: boolean }[]; pageErrors: string[]; consoleErrors: string[]; notes: string[] }) {
+function printHuman(r: { addons?: AddonResult[]; via?: string; tab?: string; error?: string; export?: { outcome: string; platform: string; to: string; files: number | null; outputs: { name: string; to: string }[]; warnings: string[]; reportText: string | null; dialogs: { id: string; text: string }[]; error?: string }; startupPageErrors: string[]; preview?: PreviewResult; save?: SaveReport; outcome: string; project: { name: string | null; path: string }; release: string; durationMs: number; dialogs: { id: string; langKey: string | null; title: string; body: string }[]; missingAddons: { type: string; id: string }[]; bundledAddons: { name: string | null; version: string | null; installed: boolean }[]; pageErrors: string[]; consoleErrors: string[]; notes: string[] }) {
   console.log(`${r.outcome}  ${r.project.name ?? r.project.path}  (${r.release}, ${(r.durationMs / 1000).toFixed(1)}s${r.via === "daemon" ? `, daemon ${r.tab}` : ""})`);
   if (r.error) console.log(`  error: ${r.error}`);
   for (const n of r.notes) console.log(`  note: ${n}`);
@@ -440,9 +538,12 @@ function printHuman(r: { addons?: AddonResult[]; via?: string; tab?: string; err
   }
   if (r.export) {
     const x = r.export;
-    if (x.outcome === "exported") console.log(`  exported → ${x.to}${x.files !== null ? ` (${x.files} files)` : ""}`);
-    else console.log(`  export ${x.outcome}${x.error ? `: ${x.error}` : ""}`);
-    for (const d of x.dialogs) console.log(`    dialog ${d.id}: ${d.text.replace(/\s+/g, " ").slice(0, 200)}`);
+    if (x.outcome === "exported") {
+      if (x.outputs.length > 1) for (const o of x.outputs) console.log(`  exported ${o.name} → ${o.to}`);
+      else console.log(`  exported${x.platform !== "web" ? ` for ${x.platform}` : ""} → ${x.to}${x.files !== null ? ` (${x.files} files)` : ""}`);
+    } else console.log(`  export ${x.outcome}${x.error ? `: ${x.error}` : ""}`);
+    for (const w of x.warnings) console.log(`    warning (accepted): ${w.slice(0, 200)}`);
+    if (x.outcome !== "exported") for (const d of x.dialogs) console.log(`    dialog ${d.id}: ${d.text.replace(/\s+/g, " ").slice(0, 200)}`);
   }
   if (r.save?.ok) {
     const s = r.save;
@@ -458,7 +559,9 @@ function printHuman(r: { addons?: AddonResult[]; via?: string; tab?: string; err
     }
     const w = s.savedWithRelease;
     if (w && w.before !== w.after) console.log(`  savedWithRelease ${w.before ?? "?"} → ${w.after ?? "?"}`);
-  } else if (r.save) console.log(`  save failed: ${r.save.error}`);
+    for (const x of s.warnings ?? []) console.log(`  warning: ${x}`);
+  } else if (r.save?.refused) console.log(`  save refused: ${r.save.error}`);
+  else if (r.save) console.log(`  save failed: ${r.save.error}`);
 }
 
 await program.parseAsync();

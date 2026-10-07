@@ -200,6 +200,8 @@ export class Bridge {
   private roots = new Map<number, Root>();
   private nextId = 1;
   readonly ops: WriteOp[] = [];
+  // How many drops the last open() took (more than 1: the editor ignored the first).
+  dropAttempts = 0;
 
   private constructor(readonly page: Page) {}
 
@@ -221,12 +223,19 @@ export class Bridge {
   // writes refused until a save allows them. Throws if the editor ignored the drop.
   async open(abs: string, kind: Root["kind"]): Promise<Root> {
     const root = this.add(abs, kind);
-    await this.page.evaluate((id) => { const w = window as any; w.__c3cliDropRoot = id; w.__c3cliDropTaken = null; }, root.id);
-    await drop(this.page, abs);
-    await this.page.waitForFunction((id) => (window as any).__c3cliDropTaken === id, root.id, { timeout: 5000 }).catch(() => {
-      throw new Error("the editor did not take the dropped project (is a dialog in the way, or did its drop handling change?)");
-    });
-    return root;
+    // The editor reads a drop's handle in its drop handler, so a drop it didn't take was never
+    // handled (seen now and then, with nothing in the way): dropping again is safe.
+    for (let attempt = 1; ; attempt++) {
+      await this.page.evaluate((id) => { const w = window as any; w.__c3cliDropRoot = id; w.__c3cliDropTaken = null; }, root.id);
+      await drop(this.page, abs);
+      const taken = await this.page.waitForFunction((id) => (window as any).__c3cliDropTaken === id, root.id, { timeout: attempt < 3 ? 3000 : 5000 }).then(() => true, () => false);
+      if (taken) { this.dropAttempts = attempt; return root; }
+      if (attempt === 3) {
+        const open = await this.page.evaluate(() => [...document.querySelectorAll("dialog[open]")].map((d) => d.id)).catch(() => []);
+        throw new Error(`the editor did not take the dropped project after 3 drops (${open.length ? `dialogs open: ${open.join(", ")}` : "no dialog open; did its drop handling change?"})`);
+      }
+      await this.page.waitForTimeout(500);
+    }
   }
 
   // Drop a real file or folder that the editor doesn't see: the editor's next file picker

@@ -7,6 +7,11 @@ the type comes from the project's `usedAddons` (zh-CN/zh-TW use one word for plu
 effect). The window title's product name is "Construct 3" wrapped in `ui.title-beta` /
 `ui.title-lts` on those branches: "{0} beta" in English, "beta {0}" in Italian (the only
 language that puts it first, r503 and r449-5), which made Italian beta opens time out.
+Untranslated keys (2026-10-06): the editor shows a string its language lacks as the English
+one in brackets (`[${text}]`, links and `.help-url` keys excepted; same code in r449-5,
+r495-2, r505), and `EditorText` now does the same. Japanese on r449-5 has no
+`ui.title-lts`, so titles read "<project> - [Construct 3 LTS]": open timed out and `new`
+never saw its project. `check-languages.ts --branch lts` passes in ja-JP since.
 
 ## Findings (2026-09-23, hosted r495-2 and r497)
 - Every open outcome so far shows up as a `dialog[open]` with a stable, unmangled id:

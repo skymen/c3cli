@@ -16,6 +16,7 @@ copied. The input is only ever written by `save` without `--to`.
 | `--headed` | off | Show the browser window |
 | `--keep-open` | off | Leave the editor open until you close the window (implies `--headed`). Ctrl+S there saves the project in place. |
 | `--profile <dir>` | temporary | Use and keep this browser profile. Without it, each run gets a fresh profile, deleted afterwards. |
+| `--guest` | logged in | Stay logged out: don't use the session saved by [`c3cli login`](#login-logout-and-whoami). Runs in a private browser even if the daemon is running. |
 | `--no-install-bundled-addons` | installs | Decline the editor's offer to install addons bundled in the project. The open then fails with `missing-addons`, naming them. |
 | `--addons <path>` | | Install these addons first: a `.c3addon`, a folder of them, or a zip. Repeatable. For projects that use addons they don't bundle. They stay in the browser profile: the daemon's when it's used, yours with `--profile`. See [addons install](#addons-install). |
 | `--no-daemon` | uses it | Don't use the [daemon](#daemon) even if it's running |
@@ -52,7 +53,7 @@ Outcomes: `opened`, `missing-addons`, `refused-newer-release`, `refused-by-editi
 ## save
 
 ```sh
-c3cli save <project> [--to <path>] [options]
+c3cli save <project> [--to <path>] [--allow-unbundle] [options]
 ```
 
 Opens the project and saves it with the editor (Ctrl+S).
@@ -64,6 +65,12 @@ Opens the project and saves it with the editor (Ctrl+S).
   project without `.git`, with the save on top) or a new `.c3p` for a `.c3p`, and c3cli
   lists which files differ from the input: changed, added and removed. The input isn't
   touched. Use it to see what C3 rewrites when a project passes through a given release.
+
+A project that bundles its addons (`bundleAddons: true`) is only saved by a paid account.
+The free edition, which includes being logged out, writes `bundleAddons: false` and no
+`addons/` folder, so the project then needs those addons installed wherever it's opened.
+c3cli refuses that save (`save.refused` in the report, exit 2) and writes nothing. Log in with a paid account,
+or pass `--allow-unbundle` to save anyway, with a warning.
 
 ```
 $ c3cli save untitled --to saved
@@ -130,24 +137,75 @@ example, the editor refuses to preview projects with broken tilemap data.
 ## export
 
 ```sh
-c3cli export <project> --to <new .zip | new folder> [--minify <mode>] [--lossless <fmt>] [--lossy <fmt>] [--[no-]offline] [options]
+c3cli export <project> --to <new .zip | new folder> [--platform <name>] [--set name=value]... [--accept-warnings]
+             [--minify <mode>] [--lossless <fmt>] [--lossy <fmt>] [--[no-]offline] [options]
 ```
 
-Web (HTML5) export through the editor's export wizard. Options that aren't passed keep the
-project's own settings.
+Exports through the editor's own export wizard, exactly as clicking through it would.
+Options that aren't passed keep what the editor shows: its defaults, or with a kept
+`--profile` on r488 and later, the last choices made for that project.
+
+| `--platform` | Editor platform | Releases |
+|---|---|---|
+| `web` (default) | Web (HTML5) | all |
+| `android`, `ios` | Android / iOS (Cordova): the **Cordova project**, a local zip (no builds on Scirra's build service) | all |
+| `windows` | Windows (WebView2) | all |
+| `macos` | macOS (WKWebView) | all |
+| `linux` | Linux (CEF) | all |
+| `nwjs` | NW.js | r449 LTS only |
+| `playable-ad`, `playable-ad-zip` | Playable Ad (single file), Playable Ad (zip) | all |
 
 | Option | Values |
 |---|---|
 | `--minify` | `none`, `bundle`, `simple`, `advanced`, `debug-advanced` |
 | `--lossless` | `png`, `webp` |
 | `--lossy` | `jpeg`, `webp`, `avif` |
-| `--offline` / `--no-offline` | offline support on or off |
+| `--offline` / `--no-offline` | offline support on or off (web only) |
+| `--set deduplicate-images=on`, `--set optimize-images=on` | the two image switches, every platform |
 
-On a guest or free account, export is refused (`refused-by-edition`, exit 2) when:
-- the project is over the event limit;
-- a paid-only option is chosen, which is every minify mode except `none`.
+Each platform's own options go through `--set name=value` (repeatable). Switches take
+`on`/`off`. Lists are comma-separated, and name exactly what's wanted: `arch=x64` unticks
+ARM64. An option a release doesn't have, or a value it doesn't take, stops the command
+before anything opens (exit 4). `c3cli export --help` lists them all.
 
-Log in with [`c3cli login`](#login-and-whoami) and pass `--profile`.
+| Platform | `--set` options |
+|---|---|
+| `android` | `min-version` (7.0 to 15.0), `url-whitelist`, `version-code`, `hide-status-bar`, `vibrate-permission`, `camera-permission`, `microphone-permission` |
+| `ios` | `min-version` (16.0 to 18.0), `url-whitelist`, `hide-status-bar`, `vibrate-permission`, `camera-permission`, `microphone-permission` |
+| `windows` | `arch` (`x64`, `arm64`; `x86` on r449), `bundle` (`none`, `assets`, `single-file` from r479), `steam` (`none`, `overlay`, `capture` from r503; `none` or `overlay` on r473 to r502), `devtools`, `window-caption` (r451+), `resizable`, `ignore-gpu-blacklist`, `remote-preview`, `command-line` |
+| `macos` | `app-sandbox`, `bundle-assets`, `devtools`, `window-caption`, `resizable` (both r451+), `signing-identity`, and the Permissions dialog: `camera` and `microphone` (the usage text, or `off`), `internet-server`, `pictures-folder` / `movies-folder` / `downloads-folder` (`none`, `read`, `read-write`) |
+| `linux` | `version` (`latest`, `v147`…), `arch` (`x64`, `arm64`; `arm32` on r449), `fullscreen`, `compress`, `bundle-assets`, `devtools`, `window-caption`, `resizable` (both r452+) |
+| `nwjs` | `version` (`latest`, `v0.100.1`…), `arch` (`linux32`, `linux64`, `mac64`, `mac-arm64`, `win32`, `win64`), `package-assets`, `compress`, `window-frame`, `resizable`, `kiosk`, `ignore-gpu-blacklist`, `devtools`, `steam`, `command-line` |
+
+```
+$ c3cli export game --platform windows --set arch=x64 --set bundle=single-file --to game-win.zip
+opened  Game  (r495-2, 1.2s)
+  exported for windows → /Users/me/game-win.zip
+```
+
+- **Output.** Every platform gives one zip. `--to x.zip` keeps it; `--to folder` unzips it,
+  keeping file modes, so the Linux binary and the macOS app stay executable. Linux, Windows
+  and NW.js for several platforms put a folder per platform in it (`x64/`, `arm64/`,
+  `win64/`…). Should an export ever offer several zips, `--to` must be a folder, and each is
+  unzipped into a subfolder named after it.
+- **Downloads.** Linux and NW.js download their runtime from downloads.scirra.com at every
+  export (about 126 MB per Linux architecture, about 150 MB per NW.js platform); a fresh
+  profile can't reuse the editor's cache. Give them a longer `--timeout`. Twice in about a
+  dozen runs, the editor sat at "Adding files..." until the timeout (a download that
+  never finished, it seems); running it again worked.
+- **Project checks.** Before exporting, the editor checks the project: macOS, Linux, NW.js
+  and Cordova need an app ID, Cordova a valid version and a description. A project that
+  fails gets `refused` (exit 2) with the editor's message. The editor's warnings also stop
+  the export as `refused`, unless `--accept-warnings` (then they're in `warnings`, exit 1):
+  - any platform: an image larger than 4096 px (too big for some devices), or a framerate
+    mode other than V-synced (meant for testing);
+  - Android and iOS: upper-case letters in the app ID, a version that makes a poor Android
+    version code (1 or 2 numbers, a number over 99, or a code over 2147483647), a Mobile
+    Advert object with missing details.
+- **Paid.** Logged out, or with a free account, only `web` exports; everything else is
+  `refused-by-edition` (exit 2), and so is web when the project is over the event limit or
+  with any minify mode but `none`. Log in once with
+  [`c3cli login`](#login-logout-and-whoami): every run uses that session.
 
 ## addons install
 
@@ -174,7 +232,7 @@ mode at all (NOTES.md).
 ## Daemon
 
 ```sh
-c3cli daemon start [--tabs 3] [--profile <dir>] [--branch <b> | --release <r>] [--headed]
+c3cli daemon start [--tabs 3] [--profile <dir>] [--branch <b> | --release <r>] [--guest] [--headed]
 c3cli daemon status [--report json]
 c3cli daemon stop
 c3cli daemon run ...        # the same, in the foreground (what `start` launches)
@@ -182,7 +240,8 @@ c3cli daemon run ...        # the same, in the foreground (what `start` launches
 
 The daemon keeps one Chromium with `--tabs` editor tabs loaded and ready. Project commands
 use it automatically when it's running, unless they pass `--no-daemon`, `--profile`,
-`--headed` or `--keep-open`, which need a private browser. Each command borrows a tab and
+`--guest`, `--headed` or `--keep-open`, which need a private browser. Its tabs use the
+shared login unless it was started with `--guest`; `daemon status` names the account. Each command borrows a tab and
 gives it back. The daemon then replaces that tab with a fresh editor in the background,
 so nothing carries over from one project to the next. Tabs switch release when a command
 asks for another one.
@@ -191,26 +250,46 @@ asks for another one.
 - An open takes about 2.5 s through the daemon, against 5.5 s on its own. Six projects on
   three tabs take 5–6 s.
 
-## login and whoami
+## login, logout and whoami
 
 ```sh
-c3cli login  --profile <dir> [--branch|--release] [--timeout] [--headed] [--report json]
-c3cli whoami --profile <dir> [--report json]
+c3cli login  [--profile <dir>] [--branch|--release] [--timeout] [--headed] [--report json]
+c3cli logout [--profile <dir>] [--report json]
+c3cli whoami [--profile <dir>] [--report json]
 ```
 
-`login` logs in with a Construct account's username or email and password, and keeps the
-session in `--profile`. It reads `C3CLI_USERNAME` and `C3CLI_PASSWORD` from the environment,
-or asks at the terminal with the password hidden. There's no `--password` flag, so it
-doesn't end up in shell history or process lists. Google and other sign-in providers
-aren't supported.
+`login` logs in with a Construct account's username or email and password. It reads
+`C3CLI_USERNAME` and `C3CLI_PASSWORD` from the environment, or asks at the terminal with
+the password hidden. There's no `--password` flag, so it doesn't end up in shell history or
+process lists. Google and other sign-in providers aren't supported. If the editor is
+already logged in as someone else, it logs out first. A login by email can't be compared
+with the username the editor shows, so it always logs out and back in.
 
-`whoami` shows the account and edition a profile is logged in with. It exits 0 when logged
-in, and 2 for a guest.
+**Log in once, for every run.** Without `--profile`, `login` keeps the session (a token,
+never the password) in the OS credential store: the macOS keychain, the Windows Credential
+Manager, or on Linux the Secret Service (GNOME Keyring, KWallet…). A Linux machine without
+one (a server, CI) gets `~/.config/c3cli/session.json`, readable by you only. Every later
+run, the daemon included, starts logged in with it unless it passes `--guest`. Construct
+can give a new token each time the editor logs in with one, so c3cli hands the current
+token to each editor as it starts and keeps what comes back, one run at a time. Runs in
+parallel are fine.
+
+**A profile's own login wins.** `login --profile <dir>` logs that profile in and keeps the
+session there only. A profile logged in that way keeps its own account. Any other profile
+gets the shared login.
+
+`logout` ends the shared session, on Construct's server too, and removes it from the
+keychain. With `--profile`, it logs out that profile's own login. `whoami` shows the account
+and edition a run would use (`shared session` or `this profile's own login`). It exits 0
+when logged in, and 2 when not.
+
+If the shared session expires, or Construct refuses it, runs go on logged out and say so
+in their report notes. Log in again.
 
 With the credentials in a `.env` file that isn't committed:
 
 ```sh
-node --env-file=.env "$(which c3cli)" login --profile ~/.config/c3cli/me
+node --env-file=.env "$(which c3cli)" login
 ```
 
 ## Exit codes
@@ -219,7 +298,7 @@ node --env-file=.env "$(which c3cli)" login --profile ~/.config/c3cli/me
 |---|---|
 | 0 | Clean |
 | 1 | Opened with warnings: dialogs after opening (such as deprecated features), page errors, runtime errors during preview |
-| 2 | Refused: invalid project, newer release, missing addons, expression name collision, free-edition limit, login failed |
+| 2 | Refused: invalid project, newer release, missing addons, expression name collision, free-edition limit, a save that would unbundle addons, login or logout failed |
 | 3 | Crashed, timed out, editor error, or the requested preview, save, export or addon install didn't happen |
 | 4 | Tool error (bad arguments, `--to` already exists…) |
 
