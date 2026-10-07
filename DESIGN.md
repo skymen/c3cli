@@ -37,7 +37,7 @@ Never rely on timing alone. Layered signals, first one wins:
 2. Dialog DOM: the error/notice dialog components have stable-ish CSS classes/ids in
    `components/`; text is in `lang` JSON, so match by lang key when possible, not English.
 3. Project-open signal: project bar populated / window title changes / an internal
-   "project opened" event (internal-api.md).
+   "project opened" event.
 4. Timeout → `crashed|hung`.
 
 ## Internals policy
@@ -60,8 +60,7 @@ version" refusal. Going back a release can silently lose data; it stays a manual
 path (DevTools `Input.dispatchDragEvent`), not by copying them into the browser (OPFS). The
 editor's writes go to disk through a Node bridge that patches the File System Access API
 for dropped handles only; it refuses them outside c3cli's saves. `save` without `--to`
-saves in place; with `--to`, into a copy (skymen, 2026-09-26). Details in
-[tasks/open-project.md](tasks/open-project.md).
+saves in place; with `--to`, into a copy (skymen, 2026-09-26).
 
 ## Any editor language
 

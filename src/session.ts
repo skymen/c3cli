@@ -1,5 +1,5 @@
 // The shared login: one Construct account session for every c3cli run, so logging in once
-// (`c3cli login`) is enough instead of once per profile (tasks/auth.md).
+// (`c3cli login`) is enough instead of once per profile.
 //
 // Construct keeps a login as {userID, token} in account.construct.net's IndexedDB
 // (localforage → "login-data"); beta releases use accountbeta.construct.net, which accepts

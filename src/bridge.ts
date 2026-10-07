@@ -5,7 +5,7 @@
 // prompt nobody can click), so an init script patches the File System Access API for
 // handles that came from c3cli's drops: permission checks answer "granted", and writes,
 // creations and deletions go to Node through a binding, which does them on disk. Reads stay
-// native. See tasks/open-project.md.
+// native.
 //
 // Each dropped path is a "root". Node decides where a root's writes go: nowhere (refused,
 // the default), in place, or into a copy (a "mirror", for saving to another place). A drop

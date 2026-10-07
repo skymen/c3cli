@@ -14,7 +14,6 @@ limits · `[internal]` calling editor internals, demangling · `[cli]` command s
 
 ## Now
 
-- [auth] skymen tests with the real account: switching accounts, login by email, `logout` (the shared session itself, the daemon and paid features passed on 2026-10-06). See [tasks/auth.md](tasks/auth.md)
 
 ## Normal
 

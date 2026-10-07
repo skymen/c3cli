@@ -1,7 +1,7 @@
 # How c3cli works
 
 For contributors, and for anyone wondering why it can be trusted. Decisions are in
-[DESIGN.md](../DESIGN.md), and the findings behind each part are in [`tasks/`](../tasks/).
+[DESIGN.md](../DESIGN.md).
 
 ## The editor
 
@@ -29,7 +29,7 @@ pickers. There is no open-from-URL on the hosted editor. c3cli drops the project
 2. c3cli checks that the editor took the drop; if not (a dialog in the way), it says so.
 
 Playwright's own file chooser can't be used: Chromium rejects File System Access pickers
-under Playwright's interception ([tasks/open-project.md](../tasks/open-project.md)).
+under Playwright's interception.
 
 ## Writing back
 
@@ -76,8 +76,6 @@ The outcome is never inferred from timing alone:
   never becomes usable, the outcome is `editor-error`.
 - Otherwise the timeout decides: `crashed` if there were page errors, `timeout` if not.
 
-See [tasks/observe.md](../tasks/observe.md).
-
 ## Save and export
 
 - **save**: Ctrl+S, in place or into a copy (see "Writing back"). c3cli knows exactly
@@ -98,8 +96,7 @@ would, and answer its dialogs in order: an install prompt per addon (accepted), 
 prompt if it's already installed (accepted), or a refusal (an SDK v1 addon after r449, one
 that needs a newer release). Then the editor reloads, since new addons only load at
 startup. They live in the browser profile: for good with `--profile`, until it stops with
-the daemon, and for one run with a temporary profile. See
-[tasks/install-addons.md](../tasks/install-addons.md).
+the daemon, and for one run with a temporary profile.
 
 ## Language
 
@@ -118,7 +115,7 @@ at `preview.construct.net`. To reach the runtime, c3cli wraps `C3.Runtime.protot
 once, keeps `this.GetIRuntime()` (the public scripting API), and restores the method. It
 looks in the preview page first and then in its workers, since many projects run the
 runtime in a worker. `eval` runs code there. Worker errors surface on the popup page's
-console, so they're collected with the rest. See [tasks/preview.md](../tasks/preview.md).
+console, so they're collected with the rest.
 
 ## The daemon
 
@@ -136,8 +133,7 @@ code as a one-shot run. A tab that is given back is **replaced**: its page and p
 are closed and a fresh editor loads in the background. That's simpler and safer than
 closing a project, which can prompt about unsaved changes. A client adds the write bridge
 to its tab over its own DevTools connection, so the files are written by the client. After
-an addon install, idle tabs reload (`reloadTabs`). See
-[tasks/cli-surface.md](../tasks/cli-surface.md#daemon).
+an addon install, idle tabs reload (`reloadTabs`).
 
 ## Accounts
 
@@ -146,7 +142,15 @@ The password is only ever passed to that form field, and error text is scrubbed 
 Playwright's call logs repeat `fill()` values, which is why the scrubbing is needed.
 "Logged in" is read from the top bar's account name. The edition comes from whether the
 "Free edition" label is visible. The label is always in the page, so its text says
-nothing. See [tasks/auth.md](../tasks/auth.md).
+nothing.
+
+Construct keeps a login as `{userID, token}` in the account site's IndexedDB
+(`login-data`; account.construct.net, or accountbeta.construct.net on beta releases), and
+the editor's hidden login frame posts it to `token.json` at startup. `c3cli login` saves
+that session, never the password, in the OS keychain. Every browser c3cli starts gets it
+planted, and c3cli rewrites the frame's `token.json` post to carry the keychain's current
+token and saves the one that comes back, under a lock, so parallel runs never spend the
+same token twice. A profile with a login of its own (`login --profile`) is left alone.
 
 ## Rules
 

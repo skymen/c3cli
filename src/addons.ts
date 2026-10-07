@@ -1,6 +1,6 @@
 // Install addons (.c3addon files) that a project uses but doesn't bundle, the way a user
 // does: View → Addon manager → Install new addon…, confirm each install, then reload the
-// editor. They live in the browser profile (tasks/install-addons.md). Not by dropping them:
+// editor. They live in the browser profile. Not by dropping them:
 // the editor's drop handler skips legacy SDK v1 plugins and behaviors without a word.
 import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";

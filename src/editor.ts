@@ -1,6 +1,6 @@
 // Drive the hosted editor: launch a browser profile, load a release, click through its menus,
 // and save with it. Projects get into the editor by dropping their real path on it, and the
-// editor writes them back through the bridge (src/bridge.ts, tasks/open-project.md).
+// editor writes them back through the bridge (src/bridge.ts).
 import { chromium, type BrowserContext, type Page } from "playwright";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";

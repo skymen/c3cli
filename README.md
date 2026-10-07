@@ -151,7 +151,7 @@ See [docs/library.md](docs/library.md).
 - [docs/report.md](docs/report.md): the `--report json` format
 - [docs/library.md](docs/library.md): the Node API
 - [docs/how-it-works.md](docs/how-it-works.md): how a project gets into the editor and how outcomes are read
-- [DESIGN.md](DESIGN.md) for decisions, [NOTES.md](NOTES.md) for the backlog, [`tasks/`](tasks/) for the detailed notes
+- [DESIGN.md](DESIGN.md) for decisions, [NOTES.md](NOTES.md) for the backlog, [`tasks/`](tasks/) for the notes behind open backlog items
 
 ## Development
 

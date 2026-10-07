@@ -334,7 +334,7 @@ export class OpenedProject {
   }
 
   // The free edition saves bundleAddons as false and drops the addons/ folder: bundling is
-  // a paid feature (tasks/save-export.md). Refuse such a save unless allowed; null = go on.
+  // a paid feature. Refuse such a save unless allowed; null = go on.
   private async unbundleCheck(dest: string, inPlace: boolean, opts: SaveOptions): Promise<{ refusal: SaveReport | null; warnings: string[] }> {
     if (!this.info.bundleAddons) return { refusal: null, warnings: [] };
     const account = await waitForAccount(this.page, 15_000, this.text!);
