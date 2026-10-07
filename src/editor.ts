@@ -5,7 +5,7 @@ import { chromium, type BrowserContext, type Page } from "playwright";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { Release } from "./release.ts";
+import { EDITOR_ORIGIN, type Release } from "./release.ts";
 import { BRIDGE_SCRIPT, type Bridge, type Root } from "./bridge.ts";
 
 // Thrown when the requested release doesn't exist: a usage error, not an editor failure.
@@ -30,6 +30,7 @@ export async function launch(opts: { profile?: string; headed: boolean; cdp?: bo
     args: opts.cdp ? ["--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1"] : [],
   });
   await context.addInitScript(BRIDGE_SCRIPT);
+  await silenceReleasePrompts(context);
   const page = context.pages()[0] ?? (await context.newPage());
   let cdpUrl: string | null = null;
   if (opts.cdp) {
@@ -44,6 +45,34 @@ export async function launch(opts: { profile?: string; headed: boolean; cdp?: bo
       if (temp) await rm(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     },
   };
+}
+
+// The editor's prompts about its own release are modals that say nothing about the project
+// and can land on top of the drop. c3cli runs the release it was asked for, so:
+// - "Update available": at startup the editor fetches /versions.json and asks when its
+//   branch has a newer release (r449-5 once r449-6 is out, an older /rNNN/ stable, an older
+//   beta), whenever the fetch returns. The fetch gets an empty list.
+// - "Construct has been updated" (view the release notes): shown when the profile last ran
+//   an older release, kept as c3-last-release in the editor's localforage (the prompt
+//   opens 9–61 ms after the menu button, 2026-10-07). The key is cleared as the page
+//   starts, long before the editor reads it; without it the editor stores the running
+//   release and doesn't ask.
+// Nothing else in the editor reads either (r449-5 to r505).
+async function silenceReleasePrompts(context: BrowserContext): Promise<void> {
+  await context.route(`${EDITOR_ORIGIN}/versions.json`, (r) => r.fulfill({ contentType: "application/json", body: "[]" }));
+  await context.addInitScript((origin) => {
+    if (location.origin !== origin || window !== window.top) return;
+    const open = indexedDB.open("localforage");
+    open.onupgradeneeded = () => open.transaction?.abort(); // a fresh profile: the database is the editor's to create
+    open.onerror = () => {};
+    open.onsuccess = () => {
+      const db = open.result;
+      if (!db.objectStoreNames.contains("keyvaluepairs")) return db.close();
+      const tx = db.transaction("keyvaluepairs", "readwrite");
+      tx.objectStore("keyvaluepairs").delete("c3-last-release");
+      tx.oncomplete = tx.onerror = tx.onabort = () => db.close();
+    };
+  }, EDITOR_ORIGIN);
 }
 
 // Load the editor and get it to an idle start page. Returns the dialogs dismissed on the way.

@@ -16,6 +16,19 @@ settings or recovery prompts carry over. The browser's language is en-US, which 
 profile's editor takes as its own. A profile where someone picked another language in C3's
 settings keeps it: c3cli works in every language the editor has (see "Language" below).
 
+c3cli runs the release it was asked for, so it keeps the editor from prompting about its
+own release. Those prompts are modals that say nothing about the project and can land on
+top of the drop:
+- "Update available": at startup the editor fetches `/versions.json` and asks when its
+  branch has a newer release than the one running (r449-5 once r449-6 is out, an older
+  stable at `/rNNN/`, an older beta). c3cli answers that fetch with an empty list.
+- "Construct has been updated" (view the release notes): shown when the profile last ran
+  an older release, as a pool or daemon switching releases, or a kept `--profile`, does.
+  The editor keeps that release as `c3-last-release` in its storage. c3cli clears the key
+  as each editor page starts, and the editor stores the running release without asking.
+
+Nothing else in the editor reads either (r449-5 to r505).
+
 ## Getting a project in
 
 The editor only opens projects through its own UI: drag and drop, or the file and folder
