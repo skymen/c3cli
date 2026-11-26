@@ -5,6 +5,7 @@ import { createInterface } from "node:readline/promises";
 import path from "node:path";
 import { C3Editor, REPORT_VERSION, checkTarget, resolveRelease, type AddonResult, type ExportReport, type SaveReport } from "./api.ts";
 import { DEFAULT_SOCKET, DaemonSource, daemonStatus, runDaemon, startDaemon, stopDaemon } from "./daemon.ts";
+import { downloadEditor } from "./download.ts";
 import { dismissDialogs, launch, loadEditor } from "./editor.ts";
 import { LOSSLESS_FORMATS, LOSSY_FORMATS, MINIFY_MODES, PLATFORM_NAMES, PLATFORM_SETTINGS, parseSettings, planExport, type ExportOptions, type Platform } from "./export.ts";
 import { editorText } from "./lang.ts";
@@ -129,6 +130,29 @@ async function newCommand(to: string, opts: NewOpts): Promise<number> {
   } finally {
     await editor.close();
   }
+}
+
+interface DownloadOpts { branch: Branch; release?: string; report?: "json"; timeout: number; headed: boolean }
+
+program.command("download").description("Download an editor release: load it, wait until it has cached itself for offline use, and copy its files to a folder")
+  .argument("<path>", "a new or empty folder (never overwritten)")
+  .addOption(new Option("--branch <branch>", "editor branch").choices(["stable", "beta", "lts"]).default("stable"))
+  .option("--release <rNNN>", "exact editor release, e.g. r497 or r495-2 (overrides --branch)")
+  .addOption(new Option("--report <format>", "machine-readable report on stdout").choices(["json"]))
+  .option("--timeout <seconds>", "give up after this long", (v) => Number(v), 300)
+  .option("--headed", "show the browser window", false)
+  .action((to: string, opts: DownloadOpts) => guarded(opts as unknown as OpenOpts, () => downloadCommand(to, opts)));
+
+async function downloadCommand(to: string, opts: DownloadOpts): Promise<number> {
+  const live = process.stderr.isTTY && opts.report !== "json";
+  const report = await downloadEditor(to, {
+    release: opts.release, branch: opts.branch, headed: opts.headed, timeoutMs: opts.timeout * 1000,
+    onProgress: live ? (n, total) => process.stderr.write(`\rcaching ${n}/${total} files`) : undefined,
+  }).finally(() => { if (live) process.stderr.write("\r\x1b[K"); });
+  if (opts.report === "json") console.log(JSON.stringify(report, null, 2));
+  else if (report.outcome === "downloaded") console.log(`downloaded  ${report.release} → ${report.to}  (${report.files} files, ${(report.bytes / 1e6).toFixed(1)} MB, ${(report.totalMs / 1000).toFixed(1)}s)`);
+  else console.log(`${report.outcome}  ${report.release}\n  error: ${report.error}`);
+  return report.outcome === "downloaded" ? EXIT.clean : EXIT.crashed;
 }
 
 type Then = { kind: "save"; to?: string; allowUnbundle: boolean } | { kind: "preview"; seconds: number; layout?: string } | { kind: "export"; to: string; options: ExportOptions };

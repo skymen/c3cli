@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { exactRelease, releaseName, releaseNum } from "../src/release.ts";
 import { buildTemplates, fillTemplate, isProjectTitle, makeText, matchLangKey } from "../src/lang.ts";
+import { planFiles } from "../src/download.ts";
 import { parseBundledAddon, parseMissingAddons } from "../src/observe.ts";
 
 test("release names and numbers round-trip", () => {
@@ -189,3 +190,24 @@ test("export options are checked against the platform and the release", async ()
   assert.equal(planExport("linux", stable, { settings: { "optimize-images": "on" } })[0].where, "standard");
 });
 
+
+test("cached editor URLs map to files, the release's own cache first", () => {
+  const release = exactRelease("r500");
+  const own = "c3-https://editor.construct.net/r500/-v50000", root = "c3-root-https://editor.construct.net/-v50604";
+  const files = planFiles([
+    { cache: root, url: "https://editor.construct.net/" },
+    { cache: root, url: "https://editor.construct.net/index.html" },
+    { cache: root, url: "https://editor.construct.net/r500/" },
+    { cache: own, url: "https://editor.construct.net/r500/" },
+    { cache: own, url: "https://editor.construct.net/r500/index.html" },
+    { cache: own, url: "https://editor.construct.net/r500/media/a%20b.svg" },
+    { cache: "offline-example-projects", url: "https://editor.construct.net/example-projects/r500/x.c3p" },
+    { cache: own, url: "https://example.com/other.js" },
+  ], release);
+  assert.deepEqual(files.map((f) => [f.path, f.cache === own, f.url.endsWith("/")]).sort(), [
+    ["index.html", false, false],
+    ["r500/index.html", true, false],
+    ["r500/media/a b.svg", true, false],
+  ]);
+  assert.throws(() => planFiles([{ cache: own, url: "https://editor.construct.net/r500/..%2F..%2Fevil" }], release));
+});

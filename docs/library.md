@@ -90,6 +90,19 @@ const results = await editor.installAddons(["~/addons/barrel_zoom.c3addon"]);
 Addons last as long as the profile: for good with `profile`, until `close()` with a
 temporary one, and in the daemon's profile with `C3Editor.connect()`.
 
+## Downloading a release
+
+```ts
+import { downloadEditor } from "@skymen75/c3cli";
+
+const r = await downloadEditor("C3 Versions/C3-r500", { release: "r500", onProgress: (n, total) => {} });
+// → { outcome: "downloaded" | "timeout", release, to, files, bytes, reloads, error?, totalMs }
+```
+
+It starts its own browser with a fresh profile (no editor or daemon needed) and throws for
+a release that doesn't exist or a target that isn't new or empty. See
+[commands.md](commands.md#download).
+
 ## Live previews
 
 ```ts
@@ -142,5 +155,5 @@ Use them for anything the API doesn't cover.
 - `EXPORT_PLATFORMS`, and `exportSettingsHelp(platform)`: each `settings` name a platform takes
   ([commands.md](commands.md#export) has the table); `acceptWarnings: true` goes on past the
   editor's warnings
-- The types: `OpenReport`, `OpenOptions`, `LaunchOptions`, `CreateOptions`, `SaveOptions`, `SaveReport`, `ExportPlatform`,
+- The types: `OpenReport`, `OpenOptions`, `LaunchOptions`, `CreateOptions`, `SaveOptions`, `SaveReport`, `DownloadOptions`, `DownloadReport`, `ExportPlatform`,
   `ExportReport`, `ExportOptions`, `AddonResult`, `PreviewResult`, `Branch`, `Release`

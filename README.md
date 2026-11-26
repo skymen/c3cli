@@ -12,6 +12,8 @@ It uses the real hosted editor (editor.construct.net) in a headless Chromium.
 - **export**: export to a zip or a folder, for the web, Android and iOS (Cordova project),
   Windows, macOS, Linux, NW.js (LTS) or Playable Ads, with each platform's options.
 - **addons install** / `--addons`: install addons a project uses but doesn't bundle.
+- **download**: copy any editor release (r60 onwards) to a folder, as the editor caches
+  itself for offline use.
 - A **daemon** that keeps warm editor tabs, and a **Node library** to script previews
   (run code on the runtime, send input, take screenshots).
 
@@ -47,6 +49,7 @@ c3cli preview <folder|.c3p> [--seconds 10] [--layout "Level 1"]
 c3cli export  <folder|.c3p> --to <new .zip|new folder> [--platform windows|macos|linux|android|…] [--set arch=x64]…
 c3cli new     <new folder|new .c3p> [--name "Pong"]
 c3cli addons install <.c3addon|folder|zip>... --profile <dir>   # or into the running daemon
+c3cli download <new folder> --release r500                 # the editor release's files
 ```
 
 c3cli drops the project on the editor where it is, as you would from Finder: nothing is
@@ -83,7 +86,7 @@ Exit codes:
 | 0 | Clean |
 | 1 | Opened, with warnings (dialogs after opening, page errors, runtime errors in preview) |
 | 2 | Refused (invalid project, newer release, missing addons, name collision, free-edition limit, a save that would unbundle addons, login failed) |
-| 3 | Crashed, timed out, editor error, or the preview, save or export didn't happen |
+| 3 | Crashed, timed out, editor error, or the preview, save, export or download didn't happen |
 | 4 | Tool error |
 
 The full reference is [docs/commands.md](docs/commands.md), and the JSON report is described

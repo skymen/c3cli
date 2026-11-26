@@ -165,6 +165,30 @@ planted, and c3cli rewrites the frame's `token.json` post to carry the keychain'
 token and saves the one that comes back, under a lock, so parallel runs never spend the
 same token twice. A profile with a login of its own (`login --profile`) is left alone.
 
+## Downloading a release
+
+Every release has an `offline.json` that lists all its files, and a service worker that
+caches them in Cache Storage (`c3-https://editor.construct.net/rNNN/-v<num>`) so the editor
+works offline. The site's root worker caches the shared root files. `download` lets the
+editor do that:
+- It loads `rNNN/` with no query string. The worker also caches the page's own URL, and
+  would file one with a search under the site's root.
+- It waits until the release's cache holds every file in `offline.json`. The cache is
+  created before it's filled, so its existence proves nothing: r449-5 was seen with 401 of
+  938 files.
+- With nothing cached for 30 s, it reloads the page. The worker gives up on any failed
+  fetch and tries again only on the next navigation, and it isn't registered at all if the
+  editor's startup failed.
+- It reloads once more, so the editor runs from the release's own worker. That way the
+  files the worker caches only as they're asked for (its `lazyLoad` list:
+  `tours/defaultToursList.json`) are kept too.
+- It reads every cached entry from the page and writes it under its URL path. The
+  release's own cache wins over the root's, and `example-projects/` is skipped.
+
+The result matches what `~/Documents/dlc3/dlc3.js` (a console script that zips Cache
+Storage) produced for r500: the same 989 files, and identical bytes except for the pages
+the site has changed since and the files edited by hand in that copy.
+
 ## Rules
 
 - Never write to a project unless asked to save it in place (`save` without `--to`), and

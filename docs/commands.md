@@ -111,6 +111,36 @@ $ c3cli new pong --branch beta
 created  pong → /Users/me/pong  (r503, 23 file(s))
 ```
 
+## download
+
+```sh
+c3cli download <new folder> [--branch <b> | --release <r>] [--report json] [--timeout 300] [--headed]
+```
+
+Downloads an editor release to a folder, for running or reading it offline. c3cli loads the
+release in a fresh browser profile, waits until the editor has cached itself for offline
+use (every file in the release's `offline.json` is in its service worker's cache), runs it
+once from that cache, and copies everything cached to the folder. The folder is never
+overwritten: it must be new or empty.
+
+The layout is the site's: the release under `rNNN/`, plus the shared root files the
+release's page loads (`index.html`, `kvStorage.js`, `localForageAdaptor.js`,
+`register-root-sw.js`). The root `index.html` is the site's own root page (today's stable),
+not the release's: that one is `rNNN/index.html`. Example projects aren't included. Files
+the editor only fetches when they're used (other languages, the tours, the AVIF encoder) are
+included only if the editor fetched them at startup.
+
+```
+$ c3cli download "C3 Versions/C3-r500" --release r500
+downloaded  r500 → /Users/me/C3 Versions/C3-r500  (989 files, 36.7 MB, 65.7s)
+```
+
+It takes 30 to 80 s, any release from r60 on. If nothing is cached for 30 s, c3cli reloads
+the editor. The service worker gives up after a failed fetch and only tries again on the
+next load. The report is `{ version, outcome: "downloaded" | "timeout", release, to, files,
+bytes, reloads, error?, totalMs }`. A timeout exits 3, and a release that doesn't exist
+exits 4.
+
 ## preview
 
 ```sh
@@ -299,7 +329,7 @@ node --env-file=.env "$(which c3cli)" login
 | 0 | Clean |
 | 1 | Opened with warnings: dialogs after opening (such as deprecated features), page errors, runtime errors during preview |
 | 2 | Refused: invalid project, newer release, missing addons, expression name collision, free-edition limit, a save that would unbundle addons, login or logout failed |
-| 3 | Crashed, timed out, editor error, or the requested preview, save, export or addon install didn't happen |
+| 3 | Crashed, timed out, editor error, or the requested preview, save, export, addon install or download didn't happen |
 | 4 | Tool error (bad arguments, `--to` already exists…) |
 
 Console noise the editor always prints doesn't affect the exit code. Examples are failed

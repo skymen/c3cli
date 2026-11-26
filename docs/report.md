@@ -90,6 +90,12 @@ is in the editor's language.
 to, kind, name, release, savedWithRelease, files, via, totalMs }`, `files` being what the
 editor wrote. Failures are a `tool-error`.
 
+## `download`
+
+`c3cli download --report json` prints `{ version, outcome: "downloaded" | "timeout",
+release, to, files, bytes, reloads, error?, totalMs }`. `reloads` counts the times the
+editor stopped caching and was reloaded. Other failures are a `tool-error`.
+
 ## Added by save, preview and export
 
 **`save`**: `{ to, inPlace, ok, written, savedWithRelease: { before, after }, diff: { filesChanged, changed[], added[], removed[] }, error?, refused?, warnings? }`.

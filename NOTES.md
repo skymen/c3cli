@@ -17,6 +17,7 @@ limits · `[internal]` calling editor internals, demangling · `[cli]` command s
 
 ## Normal
 
+- [preview] The preview window wait is a fixed 20 s (`src/preview.ts:101`, also the refusal-dialog wait): a big project (the UTRS Movement Lab, a full UTRS copy) missed it 4 runs in a row on a loaded machine (2026-10-14) while a small one opened. Make it follow `--timeout` / an option.
 - [save] Linux exports sometimes sit at "Adding files..." until the timeout (2 of ~12 runs, 2026-10-06); retrying worked. Watch the runtime download (requests to downloads.scirra.com) and retry or report it when it stalls. See [tasks/export-platforms.md](tasks/export-platforms.md)
 - [open] Now and then the editor ignores the project drop with nothing in the way (3 of 12 CLI runs in one batch, 0 of 36 after). `open` now drops up to 3 times and says so in the report notes ("took the project on drop 2"): watch for those notes to find the cause (2026-10-06)
 - [host] `loadEditor` still sleeps a fixed 1.5 s once the menu button shows, on every tab load (so after every project in the pool). Wait for what it's for instead, and measure (2026-10-06)
@@ -25,6 +26,9 @@ limits · `[internal]` calling editor internals, demangling · `[cli]` command s
 - [host] On a slow network Node's `fetch` in `resolveBranch` fails with ETIMEDOUT (IPv4 attempt cut at Node 22's 250 ms happy-eyeballs default, IPv6 unreachable) while curl works; `NODE_OPTIONS=--network-family-autoselection-attempt-timeout=3000` fixed it. Set it for c3cli's own requests (2026-10-07)
 - [host] `fetchLang` (lang.ts) caches a failed fetch as `null` for the life of the process (`texts` drops failures, `files` doesn't), with no retry: in a daemon, one dropped connection makes every later open on that release a tool-error ("could not load the editor's lang file") until restart. Seen in ~5 of 15 runs on 2026-10-07, probably the timeout above (2026-10-07)
 - [auth] The keyring store for Windows and Linux has only run on macOS: try it on a Windows machine and a Linux desktop, and the 0600-file fallback on a Linux without a Secret Service (2026-10-06)
+- [observe] An addon the editor can't load (an effect with `"category": "lighting"`, not a valid C3 category) shows "Oops! There was an error loading Construct... Error details: Error: invalid category" over the start page, and `open` sits until `--timeout` and reports `timeout` with no dialog or console error. Detect that overlay and report it as `editor-error` with its details line (2026-10-09)
+- [preview] `preview --layout` can't start a layout inside a collapsed Project Bar folder: the dblclick waits for a tree item that never becomes visible and times out (`src/preview.ts:47`, UTRS `CTF1` under `levels/…`, 2026-10-19). Expand its parent folders first. Workaround: start another layout, then `runtime.goToLayout(name)` in `eval`
+- [host] `playwright` is `^1.63` in package.json, so consumers that install c3cli (Pipelab's c3cli plugin, 1.x and 2.x) resolve whatever minor is newest (1.64.1 on 2026-10-15) and its Chromium revision drifts. Pin an exact Playwright version. Pipelab reads the browser revision from the installed Playwright, so it copes, but each bump triggers a new Chromium download (2026-10-15)
 
 ## Later
 
@@ -35,6 +39,7 @@ limits · `[internal]` calling editor internals, demangling · `[cli]` command s
 
 - Watch mode: re-open on file change while editing JSON by hand, and report whether C3 still accepts it. Maybe a Node API feature only (skymen, 2026-09-26)
 - Daemon: auto-restart a tab whose editor crashed mid-lease; health check in `daemon status`. Not before skymen has used daemons more (2026-09-26)
+- [host] `download` only gets the lazily-cached files (the other languages' lang files, the tours, `3rdparty/avif_enc`) that the editor fetched at startup, as dlc3 did. If a copy needs them, also fetch each language `main.html` lists (2026-11-26)
 - Integration test suite (opt-in, needs network): turn `scripts/check-*.ts` into `node --test` cases. Too slow for now (skymen, 2026-09-26)
 
 ## Notes
@@ -55,6 +60,7 @@ limits · `[internal]` calling editor internals, demangling · `[cli]` command s
 - Open entry points present in the bundle: `addEventListener("drop")` reading
   `dataTransfer.items`/`files`, `showOpenFilePicker` ×2, `showDirectoryPicker` ×4,
   `showSaveFilePicker` ×1, PWA `launchQueue.setConsumer` accepting a single `.c3p`.
+- A `download` copy served as-is (`python3 -m http.server` on 127.0.0.1) stops at "Oops! There was an error loading Construct. Error details: TypeError: unexpected type". The dlc3 copy of r500 does the same, so it's the hosting, not missing files (2026-11-26).
 - The local self-hosted copies (`~/Documents/C3 Versions/C3-r449-5|r496|r497|r500`) are
   full editor builds with a service-worker loader; dev mode needs the right origin/port —
   skymen knows the setup.
